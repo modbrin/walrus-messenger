@@ -1,0 +1,12 @@
+[package]
+name = "walrus-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1.40", features = ["rt-multi-thread"] }
+tracing-subscriber = "0.3.18"
+tracing = "0.1.40"
+tokio-postgres = "0.7"

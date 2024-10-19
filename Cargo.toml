@@ -1,0 +1,9 @@
+[workspace]
+default-members = [
+    "crates/server",
+]
+
+members = [
+    "crates/server",
+    "crates/client",
+]

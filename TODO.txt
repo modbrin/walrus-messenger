@@ -1,0 +1,7 @@
+- [x] basic chat example
+- [ ] add auth, connect to websocket with token
+- [ ] add db persistence of messages
+- [ ] add simple chat session management
+- [ ] add primitive chat history restore
+- [ ] move client to rust
+- [ ] presence indicator + heartbeat
