@@ -1,3 +1,4 @@
+## Plan
 - [x] basic chat example
 - [ ] add auth, connect to websocket with token
 - [ ] add db persistence of messages
@@ -5,3 +6,19 @@
 - [ ] add primitive chat history restore
 - [ ] move client to rust
 - [ ] presence indicator + heartbeat
+
+## Features
+### V1.0
+* invite-only registration
+* group chats up to 20 people
+* message types:
+    * text (limit 4096 chars)
+
+### V2.0
+* e2ee private chats
+* message types:
+    * uncompressed files
+    * compressed media
+
+### V3.0
+* voice chats

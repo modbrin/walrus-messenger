@@ -9,5 +9,11 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1.40", features = ["rt-multi-thread"] }
 tracing-subscriber = "0.3.18"
 tracing = "0.1.40"
-tokio-postgres = "0.7"
 futures = "0.3"
+thiserror = "1"
+chrono = "0.4.38"
+uuid = { version = "1.11", features = ["v4", "fast-rng"] }
+strum = "0.26"
+strum_macros = "0.26"
+sqlx = { version = "0.8.2", features = ["runtime-tokio", "postgres", "uuid", "derive", "macros", "chrono"] }
+sha2 = "0.11.0-pre.4"
