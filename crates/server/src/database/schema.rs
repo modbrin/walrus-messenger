@@ -22,7 +22,7 @@ fn default_origin_user() -> CreateUser {
 }
 
 impl DbConnection {
-    pub async fn create_all(&self) -> Result<(), SqlxError> {
+    pub async fn init_schema(&self) -> Result<(), SqlxError> {
         let mut transaction = self.pool().begin().await?;
         create_all_types(&mut transaction).await?;
         create_all_tables(&mut transaction).await?;
@@ -30,7 +30,7 @@ impl DbConnection {
         transaction.commit().await?;
         Ok(())
     }
-    pub async fn drop_all(&self) -> Result<(), SqlxError> {
+    pub async fn drop_schema(&self) -> Result<(), SqlxError> {
         let mut transaction = self.pool().begin().await?;
         drop_all_tables(&mut transaction).await?;
         drop_all_types(&mut transaction).await?;
@@ -43,23 +43,25 @@ impl DbConnection {
 pub async fn create_all_types(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), SqlxError> {
-    // info!("invoked create_all_types");
-    sqlx::query("CREATE TYPE user_role AS ENUM ('admin', 'regular');")
-        .execute(transaction.as_mut())
-        .await?;
-    sqlx::query("CREATE TYPE chat_kind AS ENUM ('private', 'group');")
-        .execute(transaction.as_mut())
-        .await?;
+    let statements = [
+        "CREATE TYPE user_role AS ENUM ('admin', 'regular');",
+        "CREATE TYPE chat_kind AS ENUM ('with_self', 'private', 'group', 'channel');",
+        "CREATE TYPE chat_role AS ENUM ('owner', 'moderator', 'member');",
+    ];
+    for statement in statements {
+        sqlx::query(statement).execute(transaction.as_mut()).await?;
+    }
     Ok(())
 }
 
 #[instrument(skip_all)]
 pub async fn drop_all_types(transaction: &mut Transaction<'_, Postgres>) -> Result<(), SqlxError> {
     let statements = [
+        "DROP TYPE IF EXISTS chat_role;",
         "DROP TYPE IF EXISTS chat_kind;",
         "DROP TYPE IF EXISTS user_role;",
     ];
-    for statement in &statements {
+    for statement in statements {
         sqlx::query(statement).execute(transaction.as_mut()).await?;
     }
     Ok(())
@@ -69,79 +71,65 @@ pub async fn drop_all_types(transaction: &mut Transaction<'_, Postgres>) -> Resu
 pub async fn create_all_tables(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), SqlxError> {
-    sqlx::query(
+    let statements = [
         "
-            CREATE TABLE users (
-                id              int PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                alias           VARCHAR(30) NOT NULL UNIQUE,
-                display_name    VARCHAR(30) NOT NULL,
-                password_salt   BYTEA NOT NULL,
-                password_hash   BYTEA NOT NULL,
-                created_at      TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-                role            user_role NOT NULL,
-                bio             VARCHAR(255),
-                invited_by      int
-            );
-        ",
-    )
-    .execute(transaction.as_mut())
-    .await?;
-    sqlx::query(
+        CREATE TABLE users (
+            id               int PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+            alias            VARCHAR(30) NOT NULL UNIQUE,
+            display_name     VARCHAR(30) NOT NULL,
+            password_salt    BYTEA NOT NULL,
+            password_hash    BYTEA NOT NULL,
+            created_at       TIMESTAMPTZ NOT NULL,
+            role             user_role NOT NULL,
+            bio              VARCHAR(255),
+            invited_by       int
+        );
+    ",
         "
-            CREATE TABLE chats (
-                id                        uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-                display_name              VARCHAR(50),
-                description               VARCHAR(255),
-                kind                      chat_kind NOT NULL,
-                created_at                TIMESTAMP WITHOUT TIME ZONE NOT NULL
-            );
-        ",
-    )
-    .execute(transaction.as_mut())
-    .await?;
-    sqlx::query(
+        CREATE TABLE chats (
+            id              bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+            display_name    VARCHAR(50),
+            description     VARCHAR(255),
+            kind            chat_kind NOT NULL,
+            created_at      TIMESTAMPTZ NOT NULL
+        );
+    ",
         "
-            CREATE TABLE chats_members (
-                user_id             INTEGER NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE,
-                chat_id uuid NOT    NULL REFERENCES chats(id) ON UPDATE CASCADE ON DELETE CASCADE,
-                CONSTRAINT chat_user_pkey PRIMARY KEY (user_id, chat_id)
-            );
-        ",
-    )
-        .execute(transaction.as_mut())
-        .await?;
-    sqlx::query(
+        CREATE TABLE chats_members (
+            chat_id   bigint NOT NULL REFERENCES chats(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            user_id   int NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            role      chat_role NOT NULL,
+            CONSTRAINT chat_user_pkey PRIMARY KEY (user_id, chat_id)
+        );
+    ",
         "
-            CREATE TABLE resources (
-                id                      bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                uploaded_by_user_id     INTEGER NOT NULL REFERENCES users(id),
-                link                    VARCHAR(255) NOT NULL
-            );
-        ",
-    )
-    .execute(transaction.as_mut())
-    .await?;
-    sqlx::query(
+        CREATE TABLE resources (
+            id                      bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+            uploaded_by_user_id     INTEGER NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL,
+            url                     VARCHAR(255) NOT NULL
+        );
+    ",
         "
-            CREATE TABLE messages (
-                id           bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                user_id      int NOT NULL REFERENCES users(id),
-                chat_id      uuid NOT NULL REFERENCES chats(id),
-                text         VARCHAR(4096),
-                resource_id  bigint REFERENCES resources(id),
-                created_at   TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-                edited_at    TIMESTAMP WITHOUT TIME ZONE
-            );
-        ",
-    )
-    .execute(transaction.as_mut())
-    .await?;
+        CREATE TABLE messages (
+            id           bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+            chat_id      bigint NOT NULL REFERENCES chats(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            user_id      int REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL,
+            text         VARCHAR(4096),
+            reply_to     bigint REFERENCES messages(id) ON UPDATE CASCADE ON DELETE SET NULL,
+            resource_id  bigint REFERENCES resources(id) ON UPDATE CASCADE ON DELETE NO ACTION,
+            created_at   TIMESTAMPTZ NOT NULL,
+            edited_at    TIMESTAMPTZ
+        );
+    ",
+    ];
+    for statement in statements {
+        sqlx::query(statement).execute(transaction.as_mut()).await?;
+    }
     Ok(())
 }
 
 #[instrument(skip_all)]
 pub async fn drop_all_tables(transaction: &mut Transaction<'_, Postgres>) -> Result<(), SqlxError> {
-    // info!("invoked create_all_tables");
     let statements = [
         "DROP TABLE IF EXISTS messages;",
         "DROP TABLE IF EXISTS resources;",

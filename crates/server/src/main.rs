@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crate::database::connection::{DbConfig, DbConnection};
+use crate::models::chat::ListChatsRequest;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::{Html, IntoResponse};
@@ -26,15 +27,55 @@ mod server;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-
-    test_db().await;
 }
 
-async fn test_db() {
-    let config = DbConfig::development("walrus_db", "walrus_guest", "walruspass");
-    let db = DbConnection::connect(&config).await.unwrap();
-    db.drop_all().await.unwrap();
-    db.create_all().await.unwrap();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::chat::ChatKind;
+    use crate::models::message::ListMessagesRequest;
 
-    // db.create_user("race_car_joe", "Brakus Merck", &[2; 16], &[8; 32]).await.unwrap();
+    #[tokio::test]
+    async fn create_chat_with_self() {
+        tracing_subscriber::fmt::init();
+
+        let config = DbConfig::development("walrus_db", "walrus_guest", "walruspass");
+        let db = DbConnection::connect(&config).await.unwrap();
+        db.drop_schema().await.unwrap();
+        db.init_schema().await.unwrap();
+
+        let chat_id = db.create_with_self_chat(1).await.unwrap();
+        let msg1 = "Hello, saved messages!";
+        let msg2 = "Saving this another text for later :)";
+        db.send_message(1, chat_id, msg1).await.unwrap();
+        db.send_message(1, chat_id, msg2).await.unwrap();
+
+        let chats = db
+            .list_chats(&ListChatsRequest {
+                user_id: 1,
+                page_size: 100,
+                page_num: 1,
+            })
+            .await
+            .unwrap()
+            .chats;
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].id, chat_id);
+        assert_eq!(chats[0].display_name, None);
+        assert_eq!(chats[0].kind, ChatKind::WithSelf);
+
+        let messages = db
+            .list_messages(&ListMessagesRequest {
+                user_id: 1,
+                chat_id: 1,
+                page_size: 100,
+                page_num: 1,
+            })
+            .await
+            .unwrap()
+            .messages;
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text.as_deref(), Some(msg1));
+        assert_eq!(messages[1].text.as_deref(), Some(msg2));
+    }
 }

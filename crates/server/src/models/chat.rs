@@ -1,25 +1,70 @@
+use crate::models::user::UserId;
 use chrono::{DateTime, Utc};
 
-pub type ChatId = String;
+pub type ChatId = i64;
 
-#[derive(Clone, Debug, sqlx::Type)]
+#[derive(Clone, Debug, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "chat_kind")]
 #[sqlx(rename_all = "snake_case")]
 pub enum ChatKind {
+    WithSelf,
     Private,
     Group,
+    Channel,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "chat_role")]
+#[sqlx(rename_all = "snake_case")]
+pub enum ChatRole {
+    Owner,
+    Moderator,
+    Member,
 }
 
 #[derive(Clone, Debug)]
-pub struct CreateChat {
+pub struct CreateChatRequest {
+    pub display_name: Option<String>,
+    pub description: Option<String>,
     pub kind: ChatKind,
-    pub name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AddMemberToChatRequest {
+    pub user_id: UserId,
+    pub chat_id: ChatId,
+    pub role: ChatRole,
+}
+
+#[derive(Clone, Debug)]
+pub struct UpdateMemberChatRoleRequest {
+    pub user_id: UserId,
+    pub chat_id: ChatId,
+    pub new_role: ChatRole,
+}
+
+#[derive(Clone, Debug)]
+pub struct ListChatsRequest {
+    pub user_id: UserId,
+    pub page_size: i32,
+    pub page_num: i32,
+}
+
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct ChatResponse {
+    pub id: ChatId,
+    pub display_name: Option<String>,
+    pub kind: ChatKind,
+}
+
+#[derive(Clone, Debug)]
+pub struct ListChatsResponse {
+    pub chats: Vec<ChatResponse>,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct Chat {
     pub id: ChatId,
     pub kind: ChatKind,
-    pub name: String,
     pub created_at: DateTime<Utc>,
 }

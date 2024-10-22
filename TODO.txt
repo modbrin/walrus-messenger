@@ -1,11 +1,12 @@
 ## Plan
 - [x] basic chat example
+- [x] add db persistence of messages
 - [ ] add auth, connect to websocket with token
-- [ ] add db persistence of messages
 - [ ] add simple chat session management
 - [ ] add primitive chat history restore
 - [ ] move client to rust
 - [ ] presence indicator + heartbeat
+- [ ] add external queue to scale active sessions
 
 ## Features
 ### V1.0
@@ -18,7 +19,15 @@
 * e2ee private chats
 * message types:
     * uncompressed files
-    * compressed media
+    * compressed media, reencoding must happen on client for e2ee
 
 ### V3.0
 * voice chats
+
+
+### EXTRA
+* cleanup resources periodically when no references are found
+* user message creation rate limiter
+* user resource upload rate limiter
+* user chats count limit
+
