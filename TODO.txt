@@ -1,10 +1,18 @@
 ## Plan
 - [x] basic chat example
 - [x] add db persistence of messages
+- [x] check access and existence in chats and messages requests
+- [x] create private chat and send messages test
+- [x] tests with not enough access for private chat
+- [x] tests with not enough access for chat with self
+- [ ] research auth methods
 - [ ] add auth, connect to websocket with token
-- [ ] add simple chat session management
-- [ ] add primitive chat history restore
+- [ ] create active websockets channels for broadcast, sync with db
+- [ ] api layer for user access, add input validation
+- [ ] mvp: on connect download all messages, listen to websocket
 - [ ] move client to rust
+
+- [ ] atomic private chat creation check - add constraint of existence?
 - [ ] presence indicator + heartbeat
 - [ ] add external queue to scale active sessions
 

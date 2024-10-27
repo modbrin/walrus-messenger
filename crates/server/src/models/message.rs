@@ -28,6 +28,7 @@ pub struct MessageResponse {
     pub text: Option<String>,
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
+    pub user_id: Option<UserId>,
     pub user_display_name: Option<String>,
     // pub resource_url: Option<ResourceId>,
 }

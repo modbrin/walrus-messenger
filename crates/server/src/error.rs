@@ -2,10 +2,18 @@ use thiserror::Error;
 
 use crate::models::user::UserRole;
 
+#[derive(Debug, Error)]
+pub enum RequestError {
+    #[error("validation failed: {0}")]
+    Validation(#[from] ValidationError),
+    #[error("sqlx error: {0}")]
+    Sqlx(#[from] sqlx::Error),
+}
+
 #[derive(Clone, Debug, Error)]
 pub enum ValidationError {
-    #[error("name is invalid: `{name}`, reason: {reason}")]
-    InvalidName { name: String, reason: String },
+    #[error("input value is invalid: `{value}`, reason: {reason}")]
+    InvalidInput { value: String, reason: String },
     #[error("limit exceeded for {subject}, allowed {limit} {unit}(s), got {attempted}")]
     LimitExceeded {
         subject: String,
@@ -20,4 +28,8 @@ pub enum ValidationError {
         required: UserRole,
         current: UserRole,
     },
+    #[error("requested object already exists")]
+    AlreadyExists,
+    #[error("requested object doesn't exist or the caller doesn't have access")]
+    NotFound,
 }

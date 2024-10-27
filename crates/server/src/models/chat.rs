@@ -62,6 +62,28 @@ pub struct ListChatsResponse {
     pub chats: Vec<ChatResponse>,
 }
 
+#[derive(Clone, Debug)]
+pub struct IsUserInChatRequest {
+    pub user_id: UserId,
+    pub chat_id: ChatId,
+}
+
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct IsUserInChatResponse {
+    pub is_in_chat: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PrivateChatExistsRequest {
+    pub user_id_a: UserId,
+    pub user_id_b: UserId,
+}
+
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct PrivateChatExistsResponse {
+    pub chat_exists: bool,
+}
+
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct Chat {
     pub id: ChatId,

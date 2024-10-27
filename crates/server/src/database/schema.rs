@@ -6,12 +6,12 @@ use tracing::{info, instrument};
 use crate::auth::utils::{generate_salt, hash_password_sha256};
 use crate::database::commands::create_user;
 use crate::database::connection::DbConnection;
-use crate::models::user::{CreateUser, UserRole};
+use crate::models::user::{CreateUserRequest, UserRole};
 
-fn default_origin_user() -> CreateUser {
+fn default_origin_user() -> CreateUserRequest {
     let salt = generate_salt();
     let hash = hash_password_sha256("changepassword", salt);
-    CreateUser {
+    CreateUserRequest {
         alias: "origin".to_string(),
         display_name: "Origin User".to_string(),
         role: UserRole::Admin,
