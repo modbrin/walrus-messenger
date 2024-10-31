@@ -16,12 +16,14 @@ use tokio::sync::broadcast;
 use tracing::info;
 use tracing_subscriber::fmt::format;
 
+use crate::auth::token::{authorize, protected};
+
 struct AppState {
     users: Mutex<HashSet<String>>,
     tx: broadcast::Sender<String>,
 }
 
-async fn chat_demo() {
+pub async fn chat_demo() {
     let (tx, _rx) = broadcast::channel(32);
 
     let app_state = Arc::new(AppState {
@@ -31,6 +33,8 @@ async fn chat_demo() {
 
     let app = Router::new()
         .route("/", get(client))
+        .route("/protected", get(protected))
+        .route("/login", post(authorize))
         .route("/websocket", get(websocket_handler))
         .with_state(app_state);
 

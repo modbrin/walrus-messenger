@@ -1,0 +1,7 @@
+server:
+  address: "0.0.0.0:3000"
+database:
+  username: "walrus_guest"
+  password: "walruspass"
+  dbname: "walrus_db"
+  address: localhost

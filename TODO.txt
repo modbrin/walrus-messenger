@@ -5,12 +5,17 @@
 - [x] create private chat and send messages test
 - [x] tests with not enough access for private chat
 - [x] tests with not enough access for chat with self
+- [x] add config
 - [ ] research auth methods
+- [ ] add sessions table to track user tokens
+- [ ] research how to cache user tokens
 - [ ] add auth, connect to websocket with token
-- [ ] create active websockets channels for broadcast, sync with db
+- [ ] mvp: on connect download all messages, db-only api
+- [ ] research android and web frameworks in rust
 - [ ] api layer for user access, add input validation
-- [ ] mvp: on connect download all messages, listen to websocket
-- [ ] move client to rust
+- [ ] create active websockets channels for broadcast, sync with db
+- [ ] files feature
+- [ ] groups feature
 
 - [ ] atomic private chat creation check - add constraint of existence?
 - [ ] presence indicator + heartbeat

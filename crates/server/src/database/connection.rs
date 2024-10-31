@@ -1,15 +1,15 @@
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::{Error as SqlxError, Executor};
-use std::fmt::format;
-use tokio::task::JoinHandle;
-use tracing::error;
+use sqlx::Error as SqlxError;
+use tracing::debug;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DbConfig {
-    username: String,
-    password: String,
-    dbname: String,
-    address: Option<String>,
-    max_connections: Option<u32>,
+    pub username: String,
+    pub password: String,
+    pub dbname: String,
+    pub address: Option<String>,
+    pub max_connections: Option<u32>,
 }
 
 impl DbConfig {
@@ -26,12 +26,16 @@ impl DbConfig {
         }
     }
 
+    pub fn address(&self) -> &str {
+        self.address.as_deref().unwrap_or(Self::ADDRESS_FALLBACK)
+    }
+
     pub fn get_url(&self) -> String {
         format!(
             "postgresql://{}:{}@{}/{}",
             self.username,
             self.password,
-            self.address.as_deref().unwrap_or(Self::ADDRESS_FALLBACK),
+            self.address(),
             self.dbname,
         )
     }
@@ -46,6 +50,7 @@ pub struct DbConnection {
 
 impl DbConnection {
     pub async fn connect(config: &DbConfig) -> Result<Self, SqlxError> {
+        debug!("Connecting to database at `{}`...", config.address());
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections())
             .connect(&config.get_url())
