@@ -6,8 +6,10 @@
 - [x] tests with not enough access for private chat
 - [x] tests with not enough access for chat with self
 - [x] add config
-- [ ] research auth methods
-- [ ] add sessions table to track user tokens
+- [x] research auth methods
+- [x] add sessions table to track user tokens
+- [ ] rewrite to use fields directly in requests
+- [ ] limit session count on login, e.g. add sessions limit and terminate oldest session
 - [ ] research how to cache user tokens
 - [ ] add auth, connect to websocket with token
 - [ ] mvp: on connect download all messages, db-only api

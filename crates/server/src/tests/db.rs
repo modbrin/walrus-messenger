@@ -1,10 +1,16 @@
+use base64::prelude::BASE64_STANDARD as BASE64;
+use base64::Engine;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
 
+use crate::auth::token::TokenExchangePayload;
+use crate::auth::utils::unpack_session_id_and_token;
+use crate::database::commands::MAX_SESSIONS_PER_USER;
 use crate::database::connection::{DbConfig, DbConnection};
+use crate::error::{RequestError, SessionError, ValidationError};
 use crate::models::chat::{ChatKind, ListChatsRequest};
 use crate::models::message::ListMessagesRequest;
-use crate::models::user::{InviteUserRequest, UserRole};
+use crate::models::user::{InviteUserRequest, UserId, UserRole};
 
 /// Some tests can't run in parallel, prevent them from breaking each other's state
 static SERIAL_LOCK: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
@@ -245,4 +251,134 @@ async fn create_private_chat() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn login_and_resolve_session() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let origin_user_id = 1;
+
+    let user_id_a = db
+        .invite_user(
+            origin_user_id,
+            InviteUserRequest {
+                initial_password: "existing_password_a".to_string(),
+                alias: "existing_user_a".to_string(),
+                display_name: "User A".to_string(),
+                role: UserRole::Regular,
+            },
+        )
+        .await
+        .unwrap();
+    let user_id_b = db
+        .invite_user(
+            origin_user_id,
+            InviteUserRequest {
+                initial_password: "existing_password_b".to_string(),
+                alias: "existing_user_b".to_string(),
+                display_name: "User B".to_string(),
+                role: UserRole::Regular,
+            },
+        )
+        .await
+        .unwrap();
+
+    // invalid variants
+    let result = db
+        .login("non_existent", "wrong_password")
+        .await
+        .unwrap_err();
+    assert!(matches!(result, RequestError::BadCredentials));
+    let result = db
+        .login("non_existent", "existing_password_a")
+        .await
+        .unwrap_err();
+    assert!(matches!(result, RequestError::BadCredentials));
+    let result = db
+        .login("existing_user_a", "wrong_password")
+        .await
+        .unwrap_err();
+    assert!(matches!(result, RequestError::BadCredentials));
+    let result = db
+        .login("existing_user_a", "existing_password_b")
+        .await
+        .unwrap_err();
+    assert!(matches!(result, RequestError::BadCredentials));
+
+    // normal login
+    let result_a = db
+        .login("existing_user_a", "existing_password_a")
+        .await
+        .unwrap();
+    let packed_bytes = BASE64.decode(&result_a.access_token).unwrap();
+    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
+    let resolved_user_a = db.resolve_session(&session_id, token).await.unwrap();
+    assert_eq!(resolved_user_a, user_id_a);
+
+    let result_b = db
+        .login("existing_user_b", "existing_password_b")
+        .await
+        .unwrap();
+    let packed_bytes = BASE64.decode(&result_b.access_token).unwrap();
+    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
+    let resolved_user_b = db.resolve_session(&session_id, token).await.unwrap();
+    assert_eq!(resolved_user_b, user_id_b);
+}
+
+async fn check_session(
+    db: &DbConnection,
+    tokens: &TokenExchangePayload,
+) -> Result<UserId, SessionError> {
+    let packed_bytes = BASE64.decode(&tokens.access_token).unwrap();
+    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
+    db.resolve_session(&session_id, token).await
+}
+
+#[tokio::test]
+async fn limit_sessions_count() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+    let origin_user_id = 1;
+
+    db.invite_user(
+        origin_user_id,
+        InviteUserRequest {
+            initial_password: "existing_password_a".to_string(),
+            alias: "existing_user_a".to_string(),
+            display_name: "User A".to_string(),
+            role: UserRole::Regular,
+        },
+    )
+    .await
+    .unwrap();
+
+    let first_session = db
+        .login("existing_user_a", "existing_password_a")
+        .await
+        .unwrap();
+    let _ok = check_session(&db, &first_session).await.unwrap();
+    let second_session = db
+        .login("existing_user_a", "existing_password_a")
+        .await
+        .unwrap();
+    let _ok = check_session(&db, &second_session).await.unwrap();
+
+    for _i in 0..MAX_SESSIONS_PER_USER - 2 {
+        let session = db
+            .login("existing_user_a", "existing_password_a")
+            .await
+            .unwrap();
+        let _ok = check_session(&db, &session).await.unwrap();
+    }
+
+    // creating session number MAX + 1, this should invalidate one (first) session
+    let latest_session = db
+        .login("existing_user_a", "existing_password_a")
+        .await
+        .unwrap();
+    let _ok = check_session(&db, &latest_session).await.unwrap();
+    let _ok = check_session(&db, &second_session).await.unwrap();
+    let _ok = check_session(&db, &first_session).await.unwrap_err();
 }

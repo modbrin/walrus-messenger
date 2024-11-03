@@ -1,9 +1,17 @@
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use thiserror::Error;
+use tracing::error;
 
+use crate::models::chat::ChatKind::Private;
 use crate::models::user::UserRole;
 
 #[derive(Debug, Error)]
 pub enum RequestError {
+    #[error("bad credentials")]
+    BadCredentials,
     #[error("validation failed: {0}")]
     Validation(#[from] ValidationError),
     #[error("sqlx error: {0}")]
@@ -32,4 +40,51 @@ pub enum ValidationError {
     AlreadyExists,
     #[error("requested object doesn't exist or the caller doesn't have access")]
     NotFound,
+}
+
+impl IntoResponse for RequestError {
+    fn into_response(self) -> Response {
+        let (status, error) = match self {
+            Self::Sqlx(e) => match e {
+                sqlx::Error::RowNotFound => (StatusCode::NOT_FOUND, "not found".into()),
+                e => {
+                    error!("received internal error for user request: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Something went wrong".into(),
+                    )
+                }
+            },
+            Self::Validation(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+            Self::BadCredentials => (StatusCode::UNAUTHORIZED, "bad credentials".into()),
+        };
+        let error = json!({ "error": error }).to_string();
+        (status, error).into_response()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SessionError {
+    BadToken,
+    TokenNotFound,
+    TokenExpired,
+    Internal,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ErrorResponse<'a> {
+    error: &'a str,
+}
+
+impl IntoResponse for SessionError {
+    fn into_response(self) -> Response {
+        let (status, error) = match self {
+            Self::BadToken => (StatusCode::BAD_REQUEST, "Missing or bad token in request"),
+            Self::TokenNotFound => (StatusCode::UNAUTHORIZED, "Token cannot be found"),
+            Self::TokenExpired => (StatusCode::UNAUTHORIZED, "Token has expired"),
+            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong"),
+        };
+        let error = json!({ "error": error }).to_string();
+        (status, error).into_response()
+    }
 }

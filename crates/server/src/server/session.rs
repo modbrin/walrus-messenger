@@ -16,7 +16,7 @@ use tokio::sync::broadcast;
 use tracing::info;
 use tracing_subscriber::fmt::format;
 
-use crate::auth::token::{authorize, protected};
+use crate::auth::token::{login, protected};
 
 struct AppState {
     users: Mutex<HashSet<String>>,
@@ -34,8 +34,8 @@ pub async fn chat_demo() {
     let app = Router::new()
         .route("/", get(client))
         .route("/protected", get(protected))
-        .route("/login", post(authorize))
-        .route("/websocket", get(websocket_handler))
+        .route("/login", post(login))
+        // .route("/websocket", get(websocket_handler))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")

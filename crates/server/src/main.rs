@@ -1,5 +1,4 @@
 use crate::config::AppConfig;
-use crate::server::session::chat_demo;
 
 pub(crate) mod auth;
 pub(crate) mod config;

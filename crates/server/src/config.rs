@@ -1,5 +1,5 @@
 use std::fs::read_to_string;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};

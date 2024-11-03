@@ -1,103 +1,92 @@
+use std::sync::Arc;
+
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use axum::response::IntoResponse;
-use axum::{async_trait, Json, RequestPartsExt};
+use axum::{async_trait, RequestPartsExt};
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
-use chrono::{DateTime, Days, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use once_cell::sync::Lazy;
-use rand::distributions::{Alphanumeric, DistString};
+use base64::prelude::BASE64_STANDARD as BASE64;
+use base64::Engine;
+use chrono::{DateTime, Utc};
+use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, instrument};
+use tracing::debug;
 
-use crate::auth::error::AuthError;
+use crate::auth::utils::{pack_session_id_and_token, unpack_session_id_and_token};
+use crate::error::SessionError;
+use crate::models::session::SessionId;
 use crate::models::user::UserId;
+use crate::server::state::AppState;
 
-pub struct KeyPair {
-    pub encoding: EncodingKey,
-    pub decoding: DecodingKey,
-}
-
-impl KeyPair {
-    pub fn new(secret: &[u8]) -> Self {
-        Self {
-            encoding: EncodingKey::from_secret(secret),
-            decoding: DecodingKey::from_secret(secret),
-        }
-    }
-}
-
-static KEYS: Lazy<KeyPair> = Lazy::new(|| {
-    let secret = Alphanumeric.sample_string(&mut rand::thread_rng(), 60);
-    KeyPair::new(secret.as_bytes())
-});
+pub type SessionToken = Vec<u8>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    sub: UserId,
-    exp: i64,
+    pub user_id: UserId,
 }
 
 #[async_trait]
-impl<S> FromRequestParts<S> for Claims
-where
-    S: Send + Sync,
-{
-    type Rejection = AuthError;
+impl FromRequestParts<Arc<AppState>> for Claims {
+    type Rejection = SessionError;
 
-    #[instrument(skip_all)]
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
-            .inspect_err(|e| error!("unable to extract auth header: {e}"))
-            .map_err(|_| AuthError::InvalidToken)?;
-        let token_data = decode::<Claims>(bearer.token(), &KEYS.decoding, &Validation::default())
-            .inspect_err(|e| error!("unable to decode token: {e}"))
-            .map_err(|_| AuthError::InvalidToken)?;
-        Ok(token_data.claims)
+            .map_err(|e| {
+                debug!("malformed auth header token: {e}");
+                SessionError::BadToken
+            })?;
+        let access_token = BASE64.decode(bearer.token()).map_err(|_| {
+            debug!("malformed auth header token: bearer is not base64");
+            SessionError::BadToken
+        })?;
+        let (sid, access_token) = unpack_session_id_and_token(&access_token).ok_or_else(|| {
+            debug!("malformed auth header token: unable to unpack");
+            SessionError::BadToken
+        })?;
+        let user_id = state
+            .db_connection
+            .resolve_session(&sid, access_token)
+            .await?;
+        Ok(Claims { user_id })
     }
 }
 
 #[derive(Debug, Serialize)]
-pub struct AuthBody {
-    access_token: String,
-    token_type: String,
+pub struct TokenExchangePayload {
+    pub refresh_token: String,
+    pub refresh_token_expires_at: String,
+    pub access_token: String,
+    pub access_token_expires_at: String,
 }
 
-impl AuthBody {
-    fn new(access_token: impl Into<String>) -> Self {
+impl TokenExchangePayload {
+    pub fn new<B1: AsRef<[u8]>, B2: AsRef<[u8]>>(
+        session_id: &SessionId,
+        refresh_token: B1,
+        refresh_token_expires_at: DateTime<Utc>,
+        access_token: B2,
+        access_token_expires_at: DateTime<Utc>,
+    ) -> Self {
+        let refresh_token = pack_session_id_and_token(session_id, refresh_token.as_ref());
+        let access_token = pack_session_id_and_token(session_id, access_token.as_ref());
         Self {
-            access_token: access_token.into(),
-            token_type: "Bearer".to_string(),
+            refresh_token: BASE64.encode(refresh_token),
+            refresh_token_expires_at: refresh_token_expires_at.to_rfc3339(),
+            access_token: BASE64.encode(access_token),
+            access_token_expires_at: access_token_expires_at.to_rfc3339(),
         }
     }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AuthPayload {
-    client_id: String,
-    client_secret: String,
-}
-
-pub async fn authorize(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
-    if payload.client_id != "cobra" && payload.client_secret != "bobra" {
-        return Err(AuthError::BadCredentials);
-    }
-    let expiry = (Utc::now().naive_utc() + Days::new(1))
-        .and_utc()
-        .timestamp();
-    let claims = Claims {
-        sub: 1,
-        exp: expiry,
-    };
-    let token = encode(&Header::default(), &claims, &KEYS.encoding)
-        .map_err(|_| AuthError::TokenCreation)?;
-    Ok(Json(AuthBody::new(token)))
-}
-
-pub async fn protected(claims: Claims) -> impl IntoResponse {
-    format!("Hello, {}!", claims.sub)
+    pub alias: String,
+    pub password: String,
+    pub session_id: Option<String>,
 }

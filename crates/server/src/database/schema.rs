@@ -95,6 +95,22 @@ pub async fn create_all_tables(
         );
     ",
         "
+        CREATE TABLE sessions (
+            id              uuid PRIMARY KEY,
+            user_id         int NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            ip              inet NOT NULL,
+            first_seen_at   TIMESTAMPTZ NOT NULL,
+            last_seen_at    TIMESTAMPTZ NOT NULL,
+            device_name     VARCHAR(100),
+            os_version      VARCHAR(100),
+            app_version     VARCHAR(100),
+            refresh_token             BYTEA NOT NULL,
+            refresh_token_expires_at  TIMESTAMPTZ NOT NULL,
+            access_token              BYTEA NOT NULL,
+            access_token_expires_at   TIMESTAMPTZ NOT NULL
+        );
+    ",
+        "
         CREATE TABLE chats_members (
             chat_id   bigint NOT NULL REFERENCES chats(id) ON UPDATE CASCADE ON DELETE CASCADE,
             user_id   int NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE,
@@ -134,6 +150,7 @@ pub async fn drop_all_tables(transaction: &mut Transaction<'_, Postgres>) -> Res
         "DROP TABLE IF EXISTS messages;",
         "DROP TABLE IF EXISTS resources;",
         "DROP TABLE IF EXISTS chats_members;",
+        "DROP TABLE IF EXISTS sessions;",
         "DROP TABLE IF EXISTS chats;",
         "DROP TABLE IF EXISTS users;",
     ];

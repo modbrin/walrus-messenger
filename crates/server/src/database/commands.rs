@@ -1,7 +1,20 @@
-use crate::auth::utils::{generate_salt, hash_password_sha256};
+use std::fmt::Debug;
+use std::net::{IpAddr, Ipv4Addr};
+
+use chrono::{DateTime, Utc};
+use ipnetwork::IpNetwork;
+use sqlx::{Error as SqlxError, Executor, PgExecutor, Postgres, Row, Transaction};
+use tracing::{error, info, instrument};
+
+use crate::auth::token::TokenExchangePayload;
+use crate::auth::utils::{
+    generate_salt, generate_session_token, hash_password_sha256, new_access_token_expiration,
+    new_refresh_token_expiration,
+};
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
-    get_user_by_alias, get_user_role, is_user_in_chat, private_chat_exists,
+    get_user_credentials_by_alias, get_user_id_by_alias, get_user_role, is_user_in_chat,
+    private_chat_exists,
 };
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::{
@@ -9,13 +22,15 @@ use crate::models::chat::{
     PrivateChatExistsRequest,
 };
 use crate::models::message::{CreateMessageRequest, MessageId};
+use crate::models::session::SessionId;
 use crate::models::user::{
     validate_user_alias, validate_user_display_name, validate_user_password, CreateUserRequest,
     InviteUserRequest, UserId, UserRole,
 };
-use sqlx::{Error as SqlxError, Executor, PgExecutor, Postgres, Row, Transaction};
-use std::fmt::Debug;
-use tracing::{error, info, instrument};
+
+/// Number of sessions single account can have, older sessions will be silently removed when new are added,
+/// old sessions are determined by `access_token_expires_at`
+pub const MAX_SESSIONS_PER_USER: i32 = 100;
 
 impl DbConnection {
     #[instrument(skip(self))]
@@ -59,7 +74,7 @@ impl DbConnection {
         caller: UserId,
         recipient_alias: &str,
     ) -> Result<ChatId, RequestError> {
-        let recipient_id = get_user_by_alias(self.pool(), recipient_alias)
+        let recipient_id = get_user_id_by_alias(self.pool(), recipient_alias)
             .await?
             .user_id;
         if private_chat_exists(
@@ -97,6 +112,7 @@ impl DbConnection {
         chat_id: ChatId,
         text: impl Into<String> + Debug,
     ) -> Result<MessageId, RequestError> {
+        // TODO: should be cached?
         if is_user_in_chat(
             self.pool(),
             &IsUserInChatRequest {
@@ -124,6 +140,48 @@ impl DbConnection {
             info!("attempt to send message but user is not in chat");
             Err(ValidationError::NotFound.into())
         }
+    }
+
+    #[instrument(skip(self, password))]
+    pub async fn login(
+        &self,
+        alias: &str,
+        password: &str,
+    ) -> Result<TokenExchangePayload, RequestError> {
+        let mut transaction = self.pool().begin().await?;
+        let Some(creds) = get_user_credentials_by_alias(transaction.as_mut(), alias).await? else {
+            return Err(RequestError::BadCredentials);
+        };
+        if hash_password_sha256(password, creds.password_salt) != creds.password_hash {
+            return Err(RequestError::BadCredentials);
+        }
+        let refresh_token = generate_session_token();
+        let refresh_token_expires_at = new_refresh_token_expiration();
+        let access_token = generate_session_token();
+        let access_token_expires_at = new_access_token_expiration();
+        let session_id = create_session(
+            transaction.as_mut(),
+            creds.user_id,
+            &IpNetwork::from(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
+            Some("Google Pixel"),
+            Some("Android 6.0"),
+            Some("Walrus Messenger for Android 0.0.1"),
+            &refresh_token,
+            &refresh_token_expires_at,
+            &access_token,
+            &access_token_expires_at,
+        )
+        .await?;
+        trim_sessions_for_user(transaction.as_mut(), creds.user_id, MAX_SESSIONS_PER_USER).await?;
+        transaction.commit().await?;
+        info!("successful login");
+        Ok(TokenExchangePayload::new(
+            &session_id,
+            refresh_token,
+            refresh_token_expires_at,
+            access_token,
+            access_token_expires_at,
+        ))
     }
 }
 
@@ -272,4 +330,57 @@ pub async fn create_private_chat<'a>(
     )
     .await?;
     Ok(chat_id)
+}
+
+#[instrument(skip(executor))]
+pub async fn create_session<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    ip: &IpNetwork,
+    device_name: Option<&str>,
+    os_version: Option<&str>,
+    app_version: Option<&str>,
+    refresh_token: &[u8],
+    refresh_token_expires_at: &DateTime<Utc>,
+    access_token: &[u8],
+    access_token_expires_at: &DateTime<Utc>,
+) -> Result<SessionId, SqlxError> {
+    let result = sqlx::query(
+        "
+        INSERT INTO sessions (id, user_id, ip, first_seen_at, last_seen_at, device_name, os_version, app_version, refresh_token, refresh_token_expires_at, access_token, access_token_expires_at)
+        VALUES (gen_random_uuid(), $1, $2, current_timestamp, current_timestamp, $3, $4, $5, $6, $7, $8, $9) RETURNING id;
+    ",
+    )
+        .bind(user_id)
+        .bind(ip)
+        .bind(device_name)
+        .bind(os_version)
+        .bind(app_version)
+        .bind(refresh_token)
+        .bind(refresh_token_expires_at)
+        .bind(access_token)
+        .bind(access_token_expires_at)
+        .fetch_one(executor)
+        .await?
+        .try_get("id")?;
+    Ok(result)
+}
+
+#[instrument(skip(executor))]
+pub async fn trim_sessions_for_user<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    max_sessions: i32,
+) -> Result<(), SqlxError> {
+    sqlx::query(
+        "
+        DELETE FROM sessions WHERE id IN (
+            SELECT id FROM sessions WHERE user_id = $1 ORDER BY access_token_expires_at DESC OFFSET $2
+        );
+    ")
+        .bind(user_id)
+        .bind(max_sessions)
+        .execute(executor)
+        .await?;
+    Ok(())
 }

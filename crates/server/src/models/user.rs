@@ -61,13 +61,21 @@ pub struct GetUserIdByAliasResponse {
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]
-pub struct User {
+pub struct GetUserCredentialsByAliasResponse {
     pub user_id: UserId,
-    pub display_name: String,
-    pub role: UserRole,
-    pub created_at: DateTime<Utc>,
-    pub invited_by: UserId,
+    pub password_salt: [u8; 16],
+    pub password_hash: [u8; 32],
 }
+
+// TODO: remove
+// #[derive(Clone, Debug, sqlx::FromRow)]
+// pub struct User {
+//     pub user_id: UserId,
+//     pub display_name: String,
+//     pub role: UserRole,
+//     pub created_at: DateTime<Utc>,
+//     pub invited_by: UserId,
+// }
 
 // TODO: add regexes
 pub fn validate_user_alias(alias: &str) -> Result<(), ValidationError> {

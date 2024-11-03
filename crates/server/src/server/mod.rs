@@ -4,7 +4,6 @@ use crate::config::AppConfig;
 use crate::server::state::AppState;
 
 pub mod router;
-pub mod session;
 pub mod state;
 
 pub async fn run_all(config: &AppConfig) -> anyhow::Result<()> {
