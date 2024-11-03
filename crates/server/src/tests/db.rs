@@ -25,6 +25,30 @@ async fn init_and_get_db() -> DbConnection {
     db
 }
 
+async fn invite_regular(db: &DbConnection, alias: &str, pass: &str, name: &str) -> UserId {
+    let origin_user_id = 1;
+    db.invite_user(
+        origin_user_id,
+        InviteUserRequest {
+            initial_password: pass.to_string(),
+            alias: alias.to_string(),
+            display_name: name.to_string(),
+            role: UserRole::Regular,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+async fn resolve_session(
+    db: &DbConnection,
+    tokens: &TokenExchangePayload,
+) -> Result<UserId, SessionError> {
+    let packed_bytes = BASE64.decode(&tokens.access_token).unwrap();
+    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
+    db.resolve_session(&session_id, token).await
+}
+
 #[tokio::test]
 async fn create_chat_with_self() {
     let _lock = SERIAL_LOCK.lock().await;
@@ -34,22 +58,11 @@ async fn create_chat_with_self() {
     let msg_a_1 = "Hi chat with self, here I will be sending messages for myself!";
     let msg_a_2 = "It seems lonely here :((";
 
-    let user_a = db
-        .invite_user(
-            origin_user_id,
-            InviteUserRequest {
-                initial_password: "kobrabor".to_string(),
-                alias: "user_a".to_string(),
-                display_name: "User A".to_string(),
-                role: UserRole::Regular,
-            },
-        )
-        .await
-        .unwrap();
+    let user_a = invite_regular(&db, "user_a", "passfora", "User A").await;
 
     let chats = db
         .list_chats(&ListChatsRequest {
-            user_id: 2,
+            user_id: user_a,
             page_size: 100,
             page_num: 1,
         })
@@ -83,27 +96,16 @@ async fn create_chat_with_self() {
     assert_eq!(messages[0].text.as_deref(), Some(msg_a_1));
     assert_eq!(messages[1].text.as_deref(), Some(msg_a_2));
 
-    let user_b = db
-        .invite_user(
-            origin_user_id,
-            InviteUserRequest {
-                initial_password: "bobrabor".to_string(),
-                alias: "user_b".to_string(),
-                display_name: "User B".to_string(),
-                role: UserRole::Regular,
-            },
-        )
-        .await
-        .unwrap();
-    let messages = db
-        .list_messages(&ListMessagesRequest {
-            user_id: user_b,
-            chat_id: self_chat_a_id,
-            page_num: 1,
-            page_size: 100,
-        })
-        .await
-        .unwrap_err();
+    // try to read A's chat from B
+    let user_b = invite_regular(&db, "user_b", "passforb", "User B").await;
+    db.list_messages(&ListMessagesRequest {
+        user_id: user_b,
+        chat_id: self_chat_a_id,
+        page_num: 1,
+        page_size: 100,
+    })
+    .await
+    .unwrap_err();
 }
 
 #[tokio::test]
@@ -114,49 +116,18 @@ async fn create_private_chat() {
     let origin_user_id = 1;
     let msg_a_1 = "Oh hi there baguette, just wanted to check if you still have those bakery?";
     let msg_b_2 = "Hi Ben!";
-    let msg_b_3 = "Let me check... Seems I have eated all of it :(";
+    let msg_b_3 = "Let me check... Seems I have eaten all of it :(";
     let msg_a_4 = "That's sad, I'm sad";
     let msg_a_5 = "Please let me know when you'll have more";
     let msg_b_6 = "Sure thing!";
+    let msg_c_7 = "Hi all?";
 
-    let user_a = db
-        .invite_user(
-            origin_user_id,
-            InviteUserRequest {
-                initial_password: "kobrabor".to_string(),
-                alias: "its_benjamin".to_string(),
-                display_name: "Benjamin Dover".to_string(),
-                role: UserRole::Regular,
-            },
-        )
-        .await
-        .unwrap();
-    let user_b = db
-        .invite_user(
-            origin_user_id,
-            InviteUserRequest {
-                initial_password: "bobrabor".to_string(),
-                alias: "fuance".to_string(),
-                display_name: "Le Baguette".to_string(),
-                role: UserRole::Regular,
-            },
-        )
-        .await
-        .unwrap();
-    let user_c = db
-        .invite_user(
-            origin_user_id,
-            InviteUserRequest {
-                initial_password: "borborbor".to_string(),
-                alias: "thirdparty".to_string(),
-                display_name: "Other User".to_string(),
-                role: UserRole::Regular,
-            },
-        )
-        .await
-        .unwrap();
+    let (alias_a, alias_b, alias_c) = ("its_benjamin", "fuance", "thirdparty");
+    let user_a = invite_regular(&db, alias_a, "kobrabor", "Benjamin Dover").await;
+    let user_b = invite_regular(&db, alias_b, "bobrabor", "Le Baguette").await;
+    let user_c = invite_regular(&db, alias_c, "borborbor", "Other User").await;
 
-    let chat_id = db.create_private_chat(user_a, "fuance").await.unwrap();
+    let chat_id = db.create_private_chat(user_a, alias_b).await.unwrap();
     db.send_message(user_a, chat_id, msg_a_1).await.unwrap();
     db.send_message(user_b, chat_id, msg_b_2).await.unwrap();
     db.send_message(user_b, chat_id, msg_b_3).await.unwrap();
@@ -191,9 +162,7 @@ async fn create_private_chat() {
     assert_eq!(reading_a.messages[5].text.as_deref(), Some(msg_b_6));
 
     // try to send and read messages from uninvited user
-    db.send_message(user_c, chat_id, "hi guys")
-        .await
-        .unwrap_err();
+    db.send_message(user_c, chat_id, msg_c_7).await.unwrap_err();
     db.list_messages(&ListMessagesRequest {
         user_id: user_c,
         chat_id,
@@ -215,10 +184,7 @@ async fn create_private_chat() {
     assert_eq!(reading_b.messages.len(), 6);
 
     // try to create same chat but in reverse
-    let chat_id = db
-        .create_private_chat(user_b, "its_benjamin")
-        .await
-        .unwrap_err();
+    let _chat_id = db.create_private_chat(user_b, alias_a).await.unwrap_err();
     let user_a_chats = db
         .list_chats(&ListChatsRequest {
             user_id: user_a,
@@ -258,32 +224,10 @@ async fn login_and_resolve_session() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
 
-    let origin_user_id = 1;
-
-    let user_id_a = db
-        .invite_user(
-            origin_user_id,
-            InviteUserRequest {
-                initial_password: "existing_password_a".to_string(),
-                alias: "existing_user_a".to_string(),
-                display_name: "User A".to_string(),
-                role: UserRole::Regular,
-            },
-        )
-        .await
-        .unwrap();
-    let user_id_b = db
-        .invite_user(
-            origin_user_id,
-            InviteUserRequest {
-                initial_password: "existing_password_b".to_string(),
-                alias: "existing_user_b".to_string(),
-                display_name: "User B".to_string(),
-                role: UserRole::Regular,
-            },
-        )
-        .await
-        .unwrap();
+    let (alias_a, pass_a, name_a) = ("existing_user_a", "existing_password_a", "User A");
+    let (alias_b, pass_b, name_b) = ("existing_user_b", "existing_password_b", "User B");
+    let user_id_a = invite_regular(&db, alias_a, pass_a, name_a).await;
+    let user_id_b = invite_regular(&db, alias_b, pass_b, name_b).await;
 
     // invalid variants
     let result = db
@@ -291,94 +235,86 @@ async fn login_and_resolve_session() {
         .await
         .unwrap_err();
     assert!(matches!(result, RequestError::BadCredentials));
-    let result = db
-        .login("non_existent", "existing_password_a")
-        .await
-        .unwrap_err();
+    let result = db.login("non_existent", pass_a).await.unwrap_err();
     assert!(matches!(result, RequestError::BadCredentials));
-    let result = db
-        .login("existing_user_a", "wrong_password")
-        .await
-        .unwrap_err();
+    let result = db.login(alias_a, "wrong_password").await.unwrap_err();
     assert!(matches!(result, RequestError::BadCredentials));
-    let result = db
-        .login("existing_user_a", "existing_password_b")
-        .await
-        .unwrap_err();
+    let result = db.login(alias_a, pass_b).await.unwrap_err();
+    assert!(matches!(result, RequestError::BadCredentials));
+    let result = db.login(alias_b, pass_a).await.unwrap_err();
     assert!(matches!(result, RequestError::BadCredentials));
 
     // normal login
-    let result_a = db
-        .login("existing_user_a", "existing_password_a")
-        .await
-        .unwrap();
-    let packed_bytes = BASE64.decode(&result_a.access_token).unwrap();
-    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
-    let resolved_user_a = db.resolve_session(&session_id, token).await.unwrap();
+    let result_a = db.login(alias_a, pass_a).await.unwrap();
+    let resolved_user_a = resolve_session(&db, &result_a).await.unwrap();
     assert_eq!(resolved_user_a, user_id_a);
 
-    let result_b = db
-        .login("existing_user_b", "existing_password_b")
-        .await
-        .unwrap();
-    let packed_bytes = BASE64.decode(&result_b.access_token).unwrap();
-    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
-    let resolved_user_b = db.resolve_session(&session_id, token).await.unwrap();
+    let result_b = db.login(alias_b, pass_b).await.unwrap();
+    let resolved_user_b = resolve_session(&db, &result_b).await.unwrap();
     assert_eq!(resolved_user_b, user_id_b);
-}
-
-async fn check_session(
-    db: &DbConnection,
-    tokens: &TokenExchangePayload,
-) -> Result<UserId, SessionError> {
-    let packed_bytes = BASE64.decode(&tokens.access_token).unwrap();
-    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
-    db.resolve_session(&session_id, token).await
 }
 
 #[tokio::test]
 async fn limit_sessions_count() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
-    let origin_user_id = 1;
 
-    db.invite_user(
-        origin_user_id,
-        InviteUserRequest {
-            initial_password: "existing_password_a".to_string(),
-            alias: "existing_user_a".to_string(),
-            display_name: "User A".to_string(),
-            role: UserRole::Regular,
-        },
-    )
-    .await
-    .unwrap();
+    let (alias, pass, name) = ("existing_user_a", "existing_password_a", "User A");
+    let _ = invite_regular(&db, alias, pass, name).await;
 
-    let first_session = db
-        .login("existing_user_a", "existing_password_a")
-        .await
-        .unwrap();
-    let _ok = check_session(&db, &first_session).await.unwrap();
-    let second_session = db
-        .login("existing_user_a", "existing_password_a")
-        .await
-        .unwrap();
-    let _ok = check_session(&db, &second_session).await.unwrap();
+    let first_session = db.login(alias, pass).await.unwrap();
+    let _ok = resolve_session(&db, &first_session).await.unwrap();
+    let second_session = db.login(alias, pass).await.unwrap();
+    let _ok = resolve_session(&db, &second_session).await.unwrap();
 
     for _i in 0..MAX_SESSIONS_PER_USER - 2 {
-        let session = db
-            .login("existing_user_a", "existing_password_a")
-            .await
-            .unwrap();
-        let _ok = check_session(&db, &session).await.unwrap();
+        let session = db.login(alias, pass).await.unwrap();
+        let _ok = resolve_session(&db, &session).await.unwrap();
     }
 
     // creating session number MAX + 1, this should invalidate one (first) session
-    let latest_session = db
-        .login("existing_user_a", "existing_password_a")
-        .await
-        .unwrap();
-    let _ok = check_session(&db, &latest_session).await.unwrap();
-    let _ok = check_session(&db, &second_session).await.unwrap();
-    let _ok = check_session(&db, &first_session).await.unwrap_err();
+    let latest_session = db.login(alias, pass).await.unwrap();
+    let _ok = resolve_session(&db, &latest_session).await.unwrap();
+    let _ok = resolve_session(&db, &second_session).await.unwrap();
+    let _ok = resolve_session(&db, &first_session).await.unwrap_err();
+}
+
+#[tokio::test]
+async fn logout() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let (alias, pass, name) = ("existing_user_a", "existing_pass_a", "User A");
+    let _ = invite_regular(&db, alias, pass, name).await;
+
+    let session = db.login(alias, pass).await.unwrap();
+    let _ok = resolve_session(&db, &session).await.unwrap();
+
+    let packed_bytes = BASE64.decode(&session.access_token).unwrap();
+    let (session_id, _token) = unpack_session_id_and_token(&packed_bytes).unwrap();
+    db.logout(&session_id).await.unwrap();
+
+    let err = resolve_session(&db, &session).await.unwrap_err();
+    assert!(matches!(err, SessionError::TokenNotFound));
+}
+
+#[tokio::test]
+async fn refresh_token() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let (alias, pass, name) = ("existing_user_a", "existing_pass_a", "User A");
+    let _ = invite_regular(&db, alias, pass, name).await;
+
+    let first_session = db.login(alias, pass).await.unwrap();
+    let _ok = resolve_session(&db, &first_session).await.unwrap();
+
+    let packed_bytes = BASE64.decode(&first_session.refresh_token).unwrap();
+    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
+    let second_session = db.refresh_session(&session_id, token).await.unwrap();
+    assert_ne!(second_session.refresh_token, first_session.refresh_token);
+    assert_ne!(second_session.access_token, first_session.access_token);
+
+    let _ok = resolve_session(&db, &second_session).await.unwrap();
+    resolve_session(&db, &first_session).await.unwrap_err();
 }

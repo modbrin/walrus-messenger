@@ -15,7 +15,7 @@ use crate::models::chat::{
 use crate::models::message::{
     CreateMessageRequest, ListMessagesRequest, ListMessagesResponse, MessageId, MessageResponse,
 };
-use crate::models::session::{ResolveSessionResponse, SessionId};
+use crate::models::session::{RefreshTokenResponse, ResolveSessionResponse, SessionId};
 use crate::models::user::{
     GetUserCredentialsByAliasResponse, GetUserIdByAliasResponse, GetUserRoleResponse, UserId,
     UserRole,
@@ -66,7 +66,7 @@ impl DbConnection {
         if access_token != token.access_token {
             return Err(SessionError::TokenNotFound);
         }
-        if token.access_token_expires_at < current_time() {
+        if token.access_token_expires_at <= current_time() {
             return Err(SessionError::TokenExpired);
         }
         Ok(token.user_id)
@@ -74,7 +74,7 @@ impl DbConnection {
 }
 
 #[instrument(skip(executor))]
-pub async fn get_user_role<'a, E: PgExecutor<'a>>(
+pub(super) async fn get_user_role<'a, E: PgExecutor<'a>>(
     executor: E,
     user_id: UserId,
 ) -> Result<GetUserRoleResponse, SqlxError> {
@@ -90,7 +90,7 @@ pub async fn get_user_role<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn get_user_id_by_alias<'a, E: PgExecutor<'a>>(
+pub(super) async fn get_user_id_by_alias<'a, E: PgExecutor<'a>>(
     executor: E,
     alias: &str,
 ) -> Result<GetUserIdByAliasResponse, SqlxError> {
@@ -106,7 +106,7 @@ pub async fn get_user_id_by_alias<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn get_user_credentials_by_alias<'a, E: PgExecutor<'a>>(
+pub(super) async fn get_user_credentials_by_alias<'a, E: PgExecutor<'a>>(
     executor: E,
     alias: &str,
 ) -> Result<Option<GetUserCredentialsByAliasResponse>, SqlxError> {
@@ -122,7 +122,7 @@ pub async fn get_user_credentials_by_alias<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
+pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
     executor: E,
     request: &ListChatsRequest,
 ) -> Result<ListChatsResponse, SqlxError> {
@@ -148,7 +148,7 @@ pub async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn is_user_in_chat<'a, E: PgExecutor<'a>>(
+pub(super) async fn is_user_in_chat<'a, E: PgExecutor<'a>>(
     executor: E,
     request: &IsUserInChatRequest,
 ) -> Result<IsUserInChatResponse, SqlxError> {
@@ -165,7 +165,7 @@ pub async fn is_user_in_chat<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn private_chat_exists<'a, E: PgExecutor<'a>>(
+pub(super) async fn private_chat_exists<'a, E: PgExecutor<'a>>(
     executor: E,
     request: &PrivateChatExistsRequest,
 ) -> Result<PrivateChatExistsResponse, SqlxError> {
@@ -188,7 +188,7 @@ pub async fn private_chat_exists<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn list_messages_for_user<'a, E: PgExecutor<'a>>(
+pub(super) async fn list_messages_for_user<'a, E: PgExecutor<'a>>(
     executor: E,
     request: &ListMessagesRequest,
 ) -> Result<ListMessagesResponse, SqlxError> {
@@ -215,13 +215,29 @@ pub async fn list_messages_for_user<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn get_access_token<'a, E: PgExecutor<'a>>(
+pub(super) async fn get_access_token<'a, E: PgExecutor<'a>>(
     executor: E,
     session_id: &SessionId,
 ) -> Result<Option<ResolveSessionResponse>, SqlxError> {
     let result = sqlx::query_as(
         "
     SELECT user_id, access_token, access_token_expires_at FROM sessions WHERE id = $1;
+    ",
+    )
+    .bind(session_id)
+    .fetch_one(executor)
+    .await;
+    map_not_found_as_none(result)
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn get_refresh_token<'a, E: PgExecutor<'a>>(
+    executor: E,
+    session_id: &SessionId,
+) -> Result<Option<RefreshTokenResponse>, SqlxError> {
+    let result = sqlx::query_as(
+        "
+    SELECT refresh_token, refresh_token_expires_at, refresh_counter FROM sessions WHERE id = $1;
     ",
     )
     .bind(session_id)

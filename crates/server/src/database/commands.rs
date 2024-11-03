@@ -1,22 +1,24 @@
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr};
 
+use base64::prelude::BASE64_STANDARD as BASE64;
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
 use sqlx::{Error as SqlxError, Executor, PgExecutor, Postgres, Row, Transaction};
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use crate::auth::token::TokenExchangePayload;
 use crate::auth::utils::{
-    generate_salt, generate_session_token, hash_password_sha256, new_access_token_expiration,
-    new_refresh_token_expiration,
+    current_time, generate_salt, generate_session_token, hash_password_sha256,
+    new_access_token_expiration, new_refresh_token_expiration,
 };
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
-    get_user_credentials_by_alias, get_user_id_by_alias, get_user_role, is_user_in_chat,
-    private_chat_exists,
+    get_access_token, get_refresh_token, get_user_credentials_by_alias, get_user_id_by_alias,
+    get_user_role, is_user_in_chat, private_chat_exists,
 };
-use crate::error::{RequestError, ValidationError};
+use crate::error::{RequestError, SessionError, ValidationError};
 use crate::models::chat::{
     AddMemberToChatRequest, ChatId, ChatKind, ChatRole, CreateChatRequest, IsUserInChatRequest,
     PrivateChatExistsRequest,
@@ -174,9 +176,56 @@ impl DbConnection {
         .await?;
         trim_sessions_for_user(transaction.as_mut(), creds.user_id, MAX_SESSIONS_PER_USER).await?;
         transaction.commit().await?;
-        info!("successful login");
         Ok(TokenExchangePayload::new(
             &session_id,
+            refresh_token,
+            refresh_token_expires_at,
+            access_token,
+            access_token_expires_at,
+        ))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn logout(&self, session_id: &SessionId) -> Result<(), RequestError> {
+        Ok(remove_session(self.pool(), session_id).await?)
+    }
+
+    pub async fn refresh_session(
+        &self,
+        session_id: &SessionId,
+        refresh_token: &[u8],
+    ) -> Result<TokenExchangePayload, RequestError> {
+        let mut transaction = self.pool().begin().await?;
+        let Some(from_db) = get_refresh_token(self.pool(), session_id).await? else {
+            return Err(RequestError::BadCredentials);
+        };
+        if refresh_token != from_db.refresh_token {
+            return Err(RequestError::BadCredentials);
+        }
+        if from_db.refresh_token_expires_at <= current_time() {
+            return Err(RequestError::Expired);
+        }
+        let refresh_token = generate_session_token();
+        let refresh_token_expires_at = new_refresh_token_expiration();
+        let access_token = generate_session_token();
+        let access_token_expires_at = new_access_token_expiration();
+        let updated = update_session_tokens(
+            transaction.as_mut(),
+            session_id,
+            &refresh_token,
+            &refresh_token_expires_at,
+            &access_token,
+            &access_token_expires_at,
+            from_db.refresh_counter,
+        )
+        .await?;
+        if !updated {
+            // if refresh_counter didn't match, concurrent update likely happened
+            return Err(RequestError::Interrupted);
+        }
+        transaction.commit().await?;
+        Ok(TokenExchangePayload::new(
+            session_id,
             refresh_token,
             refresh_token_expires_at,
             access_token,
@@ -186,7 +235,7 @@ impl DbConnection {
 }
 
 #[instrument(skip(executor))]
-pub async fn create_user<'a, E: PgExecutor<'a>>(
+pub(super) async fn create_user<'a, E: PgExecutor<'a>>(
     executor: E,
     user: &CreateUserRequest,
 ) -> Result<UserId, SqlxError> {
@@ -208,7 +257,7 @@ pub async fn create_user<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn create_chat<'a, E: PgExecutor<'a>>(
+pub(super) async fn create_chat<'a, E: PgExecutor<'a>>(
     executor: E,
     chat: &CreateChatRequest,
 ) -> Result<ChatId, SqlxError> {
@@ -224,12 +273,12 @@ pub async fn create_chat<'a, E: PgExecutor<'a>>(
     .fetch_one(executor)
     .await?
     .try_get("id")?;
-    info!("created new chat");
+    info!("created new chat with id: {}", result);
     Ok(result)
 }
 
 #[instrument(skip(executor))]
-pub async fn add_member_to_chat<'a, E: PgExecutor<'a>>(
+pub(super) async fn add_member_to_chat<'a, E: PgExecutor<'a>>(
     executor: E,
     add: &AddMemberToChatRequest,
 ) -> Result<(), SqlxError> {
@@ -249,7 +298,7 @@ pub async fn add_member_to_chat<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
-pub async fn create_message<'a, E: PgExecutor<'a>>(
+pub(super) async fn create_message<'a, E: PgExecutor<'a>>(
     executor: E,
     message: &CreateMessageRequest,
 ) -> Result<MessageId, SqlxError> {
@@ -267,11 +316,12 @@ pub async fn create_message<'a, E: PgExecutor<'a>>(
     .fetch_one(executor)
     .await?
     .try_get("id")?;
+    debug!("created message with id: {}", result);
     Ok(result)
 }
 
 #[instrument(skip(transaction))]
-pub async fn create_with_self_chat<'a>(
+pub(super) async fn create_with_self_chat<'a>(
     transaction: &mut Transaction<'a, Postgres>,
     caller: UserId,
 ) -> Result<ChatId, SqlxError> {
@@ -293,11 +343,12 @@ pub async fn create_with_self_chat<'a>(
         },
     )
     .await?;
+    debug!("created chat with self");
     Ok(chat_id)
 }
 
 #[instrument(skip(transaction))]
-pub async fn create_private_chat<'a>(
+pub(super) async fn create_private_chat<'a>(
     transaction: &mut Transaction<'a, Postgres>,
     caller: UserId,
     recipient: UserId,
@@ -329,11 +380,12 @@ pub async fn create_private_chat<'a>(
         },
     )
     .await?;
+    debug!("created private chat");
     Ok(chat_id)
 }
 
-#[instrument(skip(executor))]
-pub async fn create_session<'a, E: PgExecutor<'a>>(
+#[instrument(skip_all, fields(user_id, ip))]
+pub(super) async fn create_session<'a, E: PgExecutor<'a>>(
     executor: E,
     user_id: UserId,
     ip: &IpNetwork,
@@ -347,8 +399,8 @@ pub async fn create_session<'a, E: PgExecutor<'a>>(
 ) -> Result<SessionId, SqlxError> {
     let result = sqlx::query(
         "
-        INSERT INTO sessions (id, user_id, ip, first_seen_at, last_seen_at, device_name, os_version, app_version, refresh_token, refresh_token_expires_at, access_token, access_token_expires_at)
-        VALUES (gen_random_uuid(), $1, $2, current_timestamp, current_timestamp, $3, $4, $5, $6, $7, $8, $9) RETURNING id;
+        INSERT INTO sessions (id, user_id, ip, first_seen_at, last_seen_at, device_name, os_version, app_version, refresh_token, refresh_token_expires_at, access_token, access_token_expires_at, refresh_counter)
+        VALUES (gen_random_uuid(), $1, $2, current_timestamp, current_timestamp, $3, $4, $5, $6, $7, $8, $9, 1) RETURNING id;
     ",
     )
         .bind(user_id)
@@ -363,16 +415,62 @@ pub async fn create_session<'a, E: PgExecutor<'a>>(
         .fetch_one(executor)
         .await?
         .try_get("id")?;
+    debug!("created session: {}", result);
     Ok(result)
 }
 
+#[instrument(skip_all, fields(session_id))]
+pub(super) async fn update_session_tokens<'a, E: PgExecutor<'a>>(
+    executor: E,
+    session_id: &SessionId,
+    refresh_token: &[u8],
+    refresh_token_expires_at: &DateTime<Utc>,
+    access_token: &[u8],
+    access_token_expires_at: &DateTime<Utc>,
+    refresh_counter: i32,
+) -> Result<bool, SqlxError> {
+    let result = sqlx::query(
+    "
+        UPDATE sessions SET refresh_token = $1, refresh_token_expires_at = $2, access_token = $3, access_token_expires_at = $4, refresh_counter = refresh_counter + 1
+        WHERE id = $5 AND refresh_counter = $6;
+    "
+    )
+    .bind(refresh_token)
+    .bind(refresh_token_expires_at)
+    .bind(access_token)
+    .bind(access_token_expires_at)
+    .bind(session_id)
+    .bind(refresh_counter)
+    .execute(executor)
+    .await?;
+    debug!("updated session tokens");
+    Ok(result.rows_affected() != 0)
+}
+
 #[instrument(skip(executor))]
-pub async fn trim_sessions_for_user<'a, E: PgExecutor<'a>>(
+pub(super) async fn remove_session<'a, E: PgExecutor<'a>>(
+    executor: E,
+    session_id: &SessionId,
+) -> Result<(), SqlxError> {
+    sqlx::query(
+        "
+        DELETE FROM sessions WHERE id = $1;
+    ",
+    )
+    .bind(session_id)
+    .execute(executor)
+    .await?;
+    debug!("removed session");
+    Ok(())
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn trim_sessions_for_user<'a, E: PgExecutor<'a>>(
     executor: E,
     user_id: UserId,
     max_sessions: i32,
 ) -> Result<(), SqlxError> {
-    sqlx::query(
+    let result = sqlx::query(
         "
         DELETE FROM sessions WHERE id IN (
             SELECT id FROM sessions WHERE user_id = $1 ORDER BY access_token_expires_at DESC OFFSET $2
@@ -382,5 +480,6 @@ pub async fn trim_sessions_for_user<'a, E: PgExecutor<'a>>(
         .bind(max_sessions)
         .execute(executor)
         .await?;
+    debug!("trimmed {} sessions", result.rows_affected());
     Ok(())
 }

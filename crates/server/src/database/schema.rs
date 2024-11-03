@@ -107,7 +107,8 @@ pub async fn create_all_tables(
             refresh_token             BYTEA NOT NULL,
             refresh_token_expires_at  TIMESTAMPTZ NOT NULL,
             access_token              BYTEA NOT NULL,
-            access_token_expires_at   TIMESTAMPTZ NOT NULL
+            access_token_expires_at   TIMESTAMPTZ NOT NULL,
+            refresh_counter           int NOT NULL
         );
     ",
         "

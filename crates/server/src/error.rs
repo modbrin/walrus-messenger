@@ -10,8 +10,12 @@ use crate::models::user::UserRole;
 
 #[derive(Debug, Error)]
 pub enum RequestError {
-    #[error("bad credentials")]
+    #[error("bad auth or refresh credentials")]
     BadCredentials,
+    #[error("interrupted operation")]
+    Interrupted,
+    #[error("operation is not valid anymore, likely requires session refresh or re-login")]
+    Expired,
     #[error("validation failed: {0}")]
     Validation(#[from] ValidationError),
     #[error("sqlx error: {0}")]
@@ -56,7 +60,9 @@ impl IntoResponse for RequestError {
                 }
             },
             Self::Validation(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-            Self::BadCredentials => (StatusCode::UNAUTHORIZED, "bad credentials".into()),
+            e @ Self::BadCredentials => (StatusCode::UNAUTHORIZED, e.to_string()),
+            e @ Self::Interrupted => (StatusCode::CONFLICT, e.to_string()),
+            e @ Self::Expired => (StatusCode::UNAUTHORIZED, e.to_string()),
         };
         let error = json!({ "error": error }).to_string();
         (status, error).into_response()
