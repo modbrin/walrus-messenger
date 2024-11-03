@@ -8,7 +8,7 @@ use crate::models::session::SessionId;
 pub fn hash_password_sha256(password: &str, salt: [u8; 16]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(password.as_bytes());
-    hash.update(&salt);
+    hash.update(salt);
     hash.finalize().into()
 }
 
@@ -49,8 +49,7 @@ pub fn current_time() -> DateTime<Utc> {
 
 pub fn pack_session_id_and_token(session_id: &SessionId, token: &[u8]) -> Vec<u8> {
     let sid_len = size_of::<SessionId>();
-    let mut out = Vec::new();
-    out.resize(sid_len + token.len(), 0);
+    let mut out = vec![0; sid_len + token.len()];
     out[..sid_len].copy_from_slice(session_id.as_bytes());
     out[sid_len..].copy_from_slice(token);
     out

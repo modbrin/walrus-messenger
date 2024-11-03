@@ -82,7 +82,7 @@ pub async fn create_all_tables(
             created_at       TIMESTAMPTZ NOT NULL,
             role             user_role NOT NULL,
             bio              VARCHAR(255),
-            invited_by       int
+            invited_by       int REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL
         );
     ",
         "
@@ -165,7 +165,16 @@ pub async fn drop_all_tables(transaction: &mut Transaction<'_, Postgres>) -> Res
 pub async fn create_origin_user(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), SqlxError> {
-    create_user(transaction.as_mut(), &default_origin_user())
-        .await
-        .map(|_| ())
+    let user = default_origin_user();
+    create_user(
+        transaction.as_mut(),
+        &user.alias,
+        &user.display_name,
+        &user.password_salt,
+        &user.password_hash,
+        user.role,
+        user.invited_by,
+    )
+    .await
+    .map(|_| ())
 }

@@ -9,7 +9,6 @@ use axum_extra::TypedHeader;
 use base64::prelude::BASE64_STANDARD as BASE64;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -88,5 +87,5 @@ impl TokenExchangePayload {
 pub struct AuthPayload {
     pub alias: String,
     pub password: String,
-    pub session_id: Option<String>,
+    pub session_id: Option<String>, // TODO: use
 }

@@ -1,4 +1,3 @@
-use futures::TryStreamExt;
 use sqlx::{Error as SqlxError, PgExecutor};
 use tracing::{error, instrument};
 
@@ -7,10 +6,9 @@ use crate::database::connection::DbConnection;
 use crate::database::utils::map_not_found_as_none;
 use crate::error::{RequestError, SessionError, ValidationError};
 use crate::models::chat::{
-    ChatResponse, IsUserInChatRequest, IsUserInChatResponse, ListChatsRequest, ListChatsResponse,
-    PrivateChatExistsRequest, PrivateChatExistsResponse,
+    ChatId, ChatResponse, IsUserInChatResponse, ListChatsResponse, PrivateChatExistsResponse,
 };
-use crate::models::message::{ListMessagesRequest, ListMessagesResponse, MessageResponse};
+use crate::models::message::{ListMessagesResponse, MessageResponse};
 use crate::models::session::{RefreshTokenResponse, ResolveSessionResponse, SessionId};
 use crate::models::user::{
     GetUserCredentialsByAliasResponse, GetUserIdByAliasResponse, GetUserRoleResponse, UserId,
@@ -19,26 +17,22 @@ use crate::models::user::{
 impl DbConnection {
     pub async fn list_chats(
         &self,
-        request: &ListChatsRequest,
+        user_id: UserId,
+        page_size: i32,
+        page_num: i32,
     ) -> Result<ListChatsResponse, SqlxError> {
-        list_chats_for_user(self.pool(), request).await
+        list_chats_for_user(self.pool(), user_id, page_size, page_num).await
     }
 
     pub async fn list_messages(
         &self,
-        request: &ListMessagesRequest,
+        user_id: UserId,
+        chat_id: ChatId,
+        page_size: i32,
+        page_num: i32,
     ) -> Result<ListMessagesResponse, RequestError> {
-        if is_user_in_chat(
-            self.pool(),
-            &IsUserInChatRequest {
-                chat_id: request.chat_id,
-                user_id: request.user_id,
-            },
-        )
-        .await?
-        .is_in_chat
-        {
-            Ok(list_messages_for_user(self.pool(), request).await?)
+        if is_user_in_chat(self.pool(), chat_id, user_id).await? {
+            Ok(list_messages_for_user(self.pool(), chat_id, page_size, page_num).await?)
         } else {
             Err(ValidationError::NotFound.into())
         }
@@ -78,7 +72,7 @@ pub(super) async fn get_user_role<'a, E: PgExecutor<'a>>(
     SELECT role FROM users WHERE id = $1;
     ",
     )
-    .bind(&user_id)
+    .bind(user_id)
     .fetch_one(executor)
     .await?;
     Ok(result)
@@ -119,7 +113,9 @@ pub(super) async fn get_user_credentials_by_alias<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
     executor: E,
-    request: &ListChatsRequest,
+    user_id: UserId,
+    page_size: i32,
+    page_num: i32,
 ) -> Result<ListChatsResponse, SqlxError> {
     let chats: Vec<ChatResponse> = sqlx::query_as(
         "
@@ -134,9 +130,9 @@ pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
     LIMIT $2 OFFSET ($3 - 1) * $2;
     ",
     )
-    .bind(&request.user_id)
-    .bind(&request.page_size)
-    .bind(&request.page_num)
+    .bind(user_id)
+    .bind(page_size)
+    .bind(page_num)
     .fetch_all(executor)
     .await?;
     Ok(ListChatsResponse { chats })
@@ -145,26 +141,28 @@ pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn is_user_in_chat<'a, E: PgExecutor<'a>>(
     executor: E,
-    request: &IsUserInChatRequest,
-) -> Result<IsUserInChatResponse, SqlxError> {
-    let result = sqlx::query_as(
+    chat_id: ChatId,
+    user_id: UserId,
+) -> Result<bool, SqlxError> {
+    let result: IsUserInChatResponse = sqlx::query_as(
         "
     SELECT EXISTS(SELECT 1 FROM chats_members WHERE chat_id = $1 AND user_id = $2) AS is_in_chat;
     ",
     )
-    .bind(&request.chat_id)
-    .bind(&request.user_id)
+    .bind(chat_id)
+    .bind(user_id)
     .fetch_one(executor)
     .await?;
-    Ok(result)
+    Ok(result.is_in_chat)
 }
 
 #[instrument(skip(executor))]
 pub(super) async fn private_chat_exists<'a, E: PgExecutor<'a>>(
     executor: E,
-    request: &PrivateChatExistsRequest,
-) -> Result<PrivateChatExistsResponse, SqlxError> {
-    let result = sqlx::query_as(
+    user_id_a: UserId,
+    user_id_b: UserId,
+) -> Result<bool, SqlxError> {
+    let result: PrivateChatExistsResponse = sqlx::query_as(
         "
     SELECT EXISTS(
         SELECT
@@ -175,17 +173,19 @@ pub(super) async fn private_chat_exists<'a, E: PgExecutor<'a>>(
     ) as chat_exists;
     ",
     )
-    .bind(&request.user_id_a)
-    .bind(&request.user_id_b)
+    .bind(user_id_a)
+    .bind(user_id_b)
     .fetch_one(executor)
     .await?;
-    Ok(result)
+    Ok(result.chat_exists)
 }
 
 #[instrument(skip(executor))]
 pub(super) async fn list_messages_for_user<'a, E: PgExecutor<'a>>(
     executor: E,
-    request: &ListMessagesRequest,
+    chat_id: ChatId,
+    page_size: i32,
+    page_num: i32,
 ) -> Result<ListMessagesResponse, SqlxError> {
     let messages: Vec<MessageResponse> = sqlx::query_as(
         "
@@ -201,9 +201,9 @@ pub(super) async fn list_messages_for_user<'a, E: PgExecutor<'a>>(
     LIMIT $2 OFFSET ($3 - 1) * $2;
     ",
     )
-    .bind(&request.chat_id)
-    .bind(&request.page_size)
-    .bind(&request.page_num)
+    .bind(chat_id)
+    .bind(page_size)
+    .bind(page_num)
     .fetch_all(executor)
     .await?;
     Ok(ListMessagesResponse { messages })

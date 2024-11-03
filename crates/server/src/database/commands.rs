@@ -1,9 +1,8 @@
-use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr};
 
 use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
-use sqlx::{Error as SqlxError, Executor, PgExecutor, Postgres, Row, Transaction};
+use sqlx::{Error as SqlxError, PgExecutor, Postgres, Row, Transaction};
 use tracing::{debug, info, instrument};
 
 use crate::auth::token::TokenExchangePayload;
@@ -17,15 +16,13 @@ use crate::database::queries::{
     is_user_in_chat, private_chat_exists,
 };
 use crate::error::{RequestError, ValidationError};
-use crate::models::chat::{
-    AddMemberToChatRequest, ChatId, ChatKind, ChatRole, CreateChatRequest, IsUserInChatRequest,
-    PrivateChatExistsRequest,
-};
-use crate::models::message::{CreateMessageRequest, MessageId};
+use crate::models::chat::{ChatId, ChatKind, ChatRole};
+use crate::models::message::MessageId;
+use crate::models::resource::ResourceId;
 use crate::models::session::SessionId;
 use crate::models::user::{
-    validate_user_alias, validate_user_display_name, validate_user_password, CreateUserRequest,
-    InviteUserRequest, UserId, UserRole,
+    validate_user_alias, validate_user_display_name, validate_user_password, InviteUserRequest,
+    UserId, UserRole,
 };
 
 /// Number of sessions single account can have, older sessions will be silently removed when new are added,
@@ -54,15 +51,16 @@ impl DbConnection {
         validate_user_password(&request.initial_password)?;
         let password_salt = generate_salt();
         let password_hash = hash_password_sha256(&request.initial_password, password_salt);
-        let creation_request = CreateUserRequest {
-            invited_by: Some(caller),
-            role: request.role,
-            alias: request.alias,
-            display_name: request.display_name,
-            password_salt,
-            password_hash,
-        };
-        let user_id = create_user(transaction.as_mut(), &creation_request).await?;
+        let user_id = create_user(
+            transaction.as_mut(),
+            &request.alias,
+            &request.display_name,
+            &password_salt,
+            &password_hash,
+            request.role,
+            Some(caller),
+        )
+        .await?;
         let _ = create_with_self_chat(&mut transaction, user_id).await?;
         transaction.commit().await?;
         Ok(user_id)
@@ -77,16 +75,7 @@ impl DbConnection {
         let recipient_id = get_user_id_by_alias(self.pool(), recipient_alias)
             .await?
             .user_id;
-        if private_chat_exists(
-            self.pool(),
-            &PrivateChatExistsRequest {
-                user_id_a: caller,
-                user_id_b: recipient_id,
-            },
-        )
-        .await?
-        .chat_exists
-        {
+        if private_chat_exists(self.pool(), caller, recipient_id).await? {
             return Err(ValidationError::AlreadyExists.into());
         }
         let mut transaction = self.pool().begin().await?;
@@ -110,34 +99,16 @@ impl DbConnection {
         &self,
         caller: UserId,
         chat_id: ChatId,
-        text: impl Into<String> + Debug,
+        text: &str,
     ) -> Result<MessageId, RequestError> {
         // TODO: should be cached?
-        if is_user_in_chat(
-            self.pool(),
-            &IsUserInChatRequest {
-                chat_id,
-                user_id: caller,
-            },
-        )
-        .await?
-        .is_in_chat
-        {
-            let message_id = create_message(
-                self.pool(),
-                &CreateMessageRequest {
-                    user_id: caller,
-                    chat_id,
-                    text: Some(text.into()),
-                    resource_id: None,
-                    reply_to: None,
-                },
-            )
-            .await?;
-            info!("sent message in chat");
+        if is_user_in_chat(self.pool(), chat_id, caller).await? {
+            let message_id =
+                create_message(self.pool(), chat_id, caller, Some(text), None, None).await?;
+            debug!("sent message in chat");
             Ok(message_id)
         } else {
-            info!("attempt to send message but user is not in chat");
+            debug!("attempt to send message but user is not in chat");
             Err(ValidationError::NotFound.into())
         }
     }
@@ -235,18 +206,23 @@ impl DbConnection {
 #[instrument(skip(executor))]
 pub(super) async fn create_user<'a, E: PgExecutor<'a>>(
     executor: E,
-    user: &CreateUserRequest,
+    alias: &str,
+    display_name: &str,
+    password_salt: &[u8],
+    password_hash: &[u8],
+    role: UserRole,
+    invited_by: Option<UserId>,
 ) -> Result<UserId, SqlxError> {
     let result = sqlx::query("
         INSERT INTO users (alias, display_name, password_salt, password_hash, role, invited_by, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, current_timestamp) RETURNING id;
     ")
-    .bind(&user.alias)
-    .bind(&user.display_name)
-    .bind(&user.password_salt)
-    .bind(&user.password_hash)
-    .bind(&user.role)
-    .bind(&user.invited_by)
+    .bind(alias)
+    .bind(display_name)
+    .bind(password_salt)
+    .bind(password_hash)
+    .bind(role)
+    .bind(invited_by)
     .fetch_one(executor)
     .await?
     .try_get("id")?;
@@ -257,7 +233,9 @@ pub(super) async fn create_user<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn create_chat<'a, E: PgExecutor<'a>>(
     executor: E,
-    chat: &CreateChatRequest,
+    display_name: Option<&str>,
+    description: Option<&str>,
+    kind: ChatKind,
 ) -> Result<ChatId, SqlxError> {
     let result = sqlx::query(
         "
@@ -265,9 +243,9 @@ pub(super) async fn create_chat<'a, E: PgExecutor<'a>>(
         VALUES ($1, $2, $3, current_timestamp) RETURNING id;
     ",
     )
-    .bind(&chat.display_name)
-    .bind(&chat.description)
-    .bind(&chat.kind)
+    .bind(display_name)
+    .bind(description)
+    .bind(kind)
     .fetch_one(executor)
     .await?
     .try_get("id")?;
@@ -278,7 +256,9 @@ pub(super) async fn create_chat<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn add_member_to_chat<'a, E: PgExecutor<'a>>(
     executor: E,
-    add: &AddMemberToChatRequest,
+    user_id: UserId,
+    chat_id: ChatId,
+    role: ChatRole,
 ) -> Result<(), SqlxError> {
     sqlx::query(
         "
@@ -286,9 +266,9 @@ pub(super) async fn add_member_to_chat<'a, E: PgExecutor<'a>>(
         VALUES ($1, $2, $3);
     ",
     )
-    .bind(&add.user_id)
-    .bind(&add.chat_id)
-    .bind(&add.role)
+    .bind(user_id)
+    .bind(chat_id)
+    .bind(role)
     .execute(executor)
     .await?;
     info!("added member to chat");
@@ -298,7 +278,11 @@ pub(super) async fn add_member_to_chat<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn create_message<'a, E: PgExecutor<'a>>(
     executor: E,
-    message: &CreateMessageRequest,
+    chat_id: ChatId,
+    user_id: UserId,
+    text: Option<&str>,
+    reply_to: Option<MessageId>,
+    resource_id: Option<ResourceId>,
 ) -> Result<MessageId, SqlxError> {
     let result = sqlx::query(
         "
@@ -306,11 +290,11 @@ pub(super) async fn create_message<'a, E: PgExecutor<'a>>(
         VALUES ($1, $2, $3, $4, $5, current_timestamp) RETURNING id;
     ",
     )
-    .bind(&message.chat_id)
-    .bind(&message.user_id)
-    .bind(&message.text)
-    .bind(&message.reply_to)
-    .bind(&message.resource_id)
+    .bind(chat_id)
+    .bind(user_id)
+    .bind(text)
+    .bind(reply_to)
+    .bind(resource_id)
     .fetch_one(executor)
     .await?
     .try_get("id")?;
@@ -323,24 +307,8 @@ pub(super) async fn create_with_self_chat<'a>(
     transaction: &mut Transaction<'a, Postgres>,
     caller: UserId,
 ) -> Result<ChatId, SqlxError> {
-    let chat_id = create_chat(
-        transaction.as_mut(),
-        &CreateChatRequest {
-            kind: ChatKind::WithSelf,
-            description: None,
-            display_name: None,
-        },
-    )
-    .await?;
-    add_member_to_chat(
-        transaction.as_mut(),
-        &AddMemberToChatRequest {
-            chat_id,
-            user_id: caller,
-            role: ChatRole::Owner,
-        },
-    )
-    .await?;
+    let chat_id = create_chat(transaction.as_mut(), None, None, ChatKind::WithSelf).await?;
+    add_member_to_chat(transaction.as_mut(), caller, chat_id, ChatRole::Owner).await?;
     debug!("created chat with self");
     Ok(chat_id)
 }
@@ -351,33 +319,9 @@ pub(super) async fn create_private_chat<'a>(
     caller: UserId,
     recipient: UserId,
 ) -> Result<ChatId, SqlxError> {
-    let chat_id = create_chat(
-        transaction.as_mut(),
-        &CreateChatRequest {
-            kind: ChatKind::Private,
-            description: None,
-            display_name: None,
-        },
-    )
-    .await?;
-    add_member_to_chat(
-        transaction.as_mut(),
-        &AddMemberToChatRequest {
-            chat_id,
-            user_id: caller,
-            role: ChatRole::Member,
-        },
-    )
-    .await?;
-    add_member_to_chat(
-        transaction.as_mut(),
-        &AddMemberToChatRequest {
-            chat_id,
-            user_id: recipient,
-            role: ChatRole::Member,
-        },
-    )
-    .await?;
+    let chat_id = create_chat(transaction.as_mut(), None, None, ChatKind::Private).await?;
+    add_member_to_chat(transaction.as_mut(), caller, chat_id, ChatRole::Member).await?;
+    add_member_to_chat(transaction.as_mut(), recipient, chat_id, ChatRole::Member).await?;
     debug!("created private chat");
     Ok(chat_id)
 }

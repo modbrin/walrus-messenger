@@ -34,19 +34,6 @@ pub struct InviteUserRequest {
     pub initial_password: String,
 }
 
-pub struct UpdateUserAliasRequest {
-    pub new_alias: String,
-}
-
-pub struct UpdateUserDisplayNameRequest {
-    pub new_display_name: String,
-}
-
-pub struct UpdateUserPasswordRequest {
-    pub password_salt: String,
-    pub password_hash: String,
-}
-
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct GetUserRoleResponse {
     pub role: UserRole,

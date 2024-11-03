@@ -8,12 +8,14 @@
 - [x] add config
 - [x] research auth methods
 - [x] add sessions table to track user tokens
-- [ ] rewrite to use fields directly in requests
-- [ ] limit session count on login, e.g. add sessions limit and terminate oldest session
+- [x] limit session count on login, e.g. add sessions limit and terminate oldest session
+- [ ] reuse session_id from login if present
+- [ ] refactor to use fields directly in requests
+- [ ] move response structs to request functions?
 - [ ] research how to cache user tokens
 - [ ] add auth, connect to websocket with token
-- [ ] mvp: on connect download all messages, db-only api
 - [ ] research android and web frameworks in rust
+- [ ] mvp: on connect download all messages, db-only api
 - [ ] api layer for user access, add input validation
 - [ ] create active websockets channels for broadcast, sync with db
 - [ ] files feature
@@ -22,6 +24,27 @@
 - [ ] atomic private chat creation check - add constraint of existence?
 - [ ] presence indicator + heartbeat
 - [ ] add external queue to scale active sessions
+
+## Needed api
+- [x] login
+- [x] resolve session
+- [x] refresh session
+- [ ] list other sessions
+- [ ] terminate other session
+- [x] logout
+- [x] invite user
+- [x] view chats
+- [x] create chat with self
+- [x] create private chat
+- [ ] create group chat
+- [ ] create channel chat
+- [x] view messages in chat
+- [x] send message in chat
+- [ ] send file in chat
+- [ ] edit message
+- [ ] remove account
+- [ ] remove chat
+- [ ] remove message
 
 ## Features
 ### V1.0
