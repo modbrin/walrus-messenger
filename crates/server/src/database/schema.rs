@@ -1,7 +1,7 @@
 use std::string::ToString;
 
 use sqlx::{Error as SqlxError, Postgres, Transaction};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::auth::utils::{generate_salt, hash_password_sha256};
 use crate::database::commands::create_user;

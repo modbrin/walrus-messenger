@@ -1,12 +1,10 @@
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr};
 
-use base64::prelude::BASE64_STANDARD as BASE64;
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
 use sqlx::{Error as SqlxError, Executor, PgExecutor, Postgres, Row, Transaction};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::auth::token::TokenExchangePayload;
 use crate::auth::utils::{
@@ -15,10 +13,10 @@ use crate::auth::utils::{
 };
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
-    get_access_token, get_refresh_token, get_user_credentials_by_alias, get_user_id_by_alias,
-    get_user_role, is_user_in_chat, private_chat_exists,
+    get_refresh_token, get_user_credentials_by_alias, get_user_id_by_alias, get_user_role,
+    is_user_in_chat, private_chat_exists,
 };
-use crate::error::{RequestError, SessionError, ValidationError};
+use crate::error::{RequestError, ValidationError};
 use crate::models::chat::{
     AddMemberToChatRequest, ChatId, ChatKind, ChatRole, CreateChatRequest, IsUserInChatRequest,
     PrivateChatExistsRequest,

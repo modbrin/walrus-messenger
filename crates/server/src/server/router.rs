@@ -7,7 +7,6 @@ use axum::{Json, Router};
 use tracing::info;
 
 use crate::auth::token::{AuthPayload, Claims, TokenExchangePayload};
-use crate::config::AppConfig;
 use crate::error::RequestError;
 use crate::server::state::AppState;
 

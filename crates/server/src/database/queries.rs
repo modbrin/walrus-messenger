@@ -1,9 +1,7 @@
-use futures::{StreamExt, TryStreamExt};
-use sha2::digest::typenum::private::IsGreaterPrivate;
-use sqlx::{Error as SqlxError, PgExecutor, Row};
-use tracing::{debug, error, info, instrument};
+use futures::TryStreamExt;
+use sqlx::{Error as SqlxError, PgExecutor};
+use tracing::{error, instrument};
 
-use crate::auth::token::SessionToken;
 use crate::auth::utils::current_time;
 use crate::database::connection::DbConnection;
 use crate::database::utils::map_not_found_as_none;
@@ -12,13 +10,10 @@ use crate::models::chat::{
     ChatResponse, IsUserInChatRequest, IsUserInChatResponse, ListChatsRequest, ListChatsResponse,
     PrivateChatExistsRequest, PrivateChatExistsResponse,
 };
-use crate::models::message::{
-    CreateMessageRequest, ListMessagesRequest, ListMessagesResponse, MessageId, MessageResponse,
-};
+use crate::models::message::{ListMessagesRequest, ListMessagesResponse, MessageResponse};
 use crate::models::session::{RefreshTokenResponse, ResolveSessionResponse, SessionId};
 use crate::models::user::{
     GetUserCredentialsByAliasResponse, GetUserIdByAliasResponse, GetUserRoleResponse, UserId,
-    UserRole,
 };
 
 impl DbConnection {

@@ -7,7 +7,7 @@ use crate::auth::token::TokenExchangePayload;
 use crate::auth::utils::unpack_session_id_and_token;
 use crate::database::commands::MAX_SESSIONS_PER_USER;
 use crate::database::connection::{DbConfig, DbConnection};
-use crate::error::{RequestError, SessionError, ValidationError};
+use crate::error::{RequestError, SessionError};
 use crate::models::chat::{ChatKind, ListChatsRequest};
 use crate::models::message::ListMessagesRequest;
 use crate::models::user::{InviteUserRequest, UserId, UserRole};

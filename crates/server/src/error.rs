@@ -5,7 +5,6 @@ use serde_json::json;
 use thiserror::Error;
 use tracing::error;
 
-use crate::models::chat::ChatKind::Private;
 use crate::models::user::UserRole;
 
 #[derive(Debug, Error)]
