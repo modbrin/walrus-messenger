@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::FromRequestParts;
+use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum::{async_trait, RequestPartsExt};
 use axum_extra::headers::authorization::Bearer;
@@ -26,13 +26,14 @@ pub struct Claims {
 }
 
 #[async_trait]
-impl FromRequestParts<Arc<AppState>> for Claims {
+impl<S> FromRequestParts<S> for Claims
+where
+    S: AsRef<AppState> + Send + Sync,
+{
     type Rejection = SessionError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<AppState>,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let state = state.as_ref();
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await

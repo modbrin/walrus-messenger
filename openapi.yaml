@@ -1,0 +1,140 @@
+openapi: 3.0.3
+info:
+  title: Walrus Messenger Backend API
+  version: 0.1.0
+  description: |
+    Implemented HTTP API only (current server state).
+    This spec intentionally excludes planned/proposed routes.
+servers:
+  - url: http://127.0.0.1:3000
+    description: Local default from config.yaml
+tags:
+  - name: auth
+  - name: system
+paths:
+  /login:
+    post:
+      tags: [auth]
+      summary: Login and create session
+      operationId: login
+      description: >
+        Authenticates user alias/password and returns access + refresh tokens.
+        Request field `session_id` is accepted by the server model but currently unused.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthPayload'
+      responses:
+        '200':
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenExchangePayload'
+        '401':
+          description: Bad credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: bad auth or refresh credentials
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /protected:
+    get:
+      tags: [system]
+      summary: Access-token validation probe
+      operationId: protectedProbe
+      description: Resolves bearer access token and returns greeting with authenticated user id.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Token valid
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Hello, 1!
+        '400':
+          description: Missing or malformed bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Missing or bad token in request
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OpaqueBase64SessionToken
+  schemas:
+    AuthPayload:
+      type: object
+      additionalProperties: false
+      required: [alias, password]
+      properties:
+        alias:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          nullable: true
+          description: Currently accepted but not used by backend logic.
+
+    TokenExchangePayload:
+      type: object
+      additionalProperties: false
+      required:
+        - refresh_token
+        - refresh_token_expires_at
+        - access_token
+        - access_token_expires_at
+      properties:
+        refresh_token:
+          type: string
+          description: Opaque token string.
+        refresh_token_expires_at:
+          type: string
+          format: date-time
+        access_token:
+          type: string
+          description: Opaque token string.
+        access_token_expires_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string

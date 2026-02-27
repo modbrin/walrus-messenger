@@ -5,5 +5,4 @@ default-members = [
 
 members = [
     "crates/server",
-    "crates/client",
 ]
