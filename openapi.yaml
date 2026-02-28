@@ -282,6 +282,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [messaging]
+      summary: Send message to a chat
+      operationId: sendMessage
+      description: Creates a new text message in the chat if current user is a member.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: chat_id
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+      responses:
+        '201':
+          description: Message created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendMessageResponse'
+        '400':
+          description: Invalid payload or malformed token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Chat not found or user has no access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
   securitySchemes:
@@ -410,6 +461,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MessageResponse'
+
+    SendMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4096
+
+    SendMessageResponse:
+      type: object
+      additionalProperties: false
+      required: [message_id]
+      properties:
+        message_id:
+          type: integer
+          format: int64
 
     ErrorResponse:
       type: object

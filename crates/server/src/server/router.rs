@@ -14,7 +14,9 @@ use crate::error::{RequestError, ValidationError};
 use crate::models::chat::ChatId;
 use crate::models::chat::ListChatsResponse;
 use crate::models::listing::{ListingMode, ListingQuery};
-use crate::models::message::ListMessagesResponse;
+use crate::models::message::{
+    validate_message_text, ListMessagesResponse, SendMessageRequest, SendMessageResponse,
+};
 use crate::models::user::WhoAmIResponse;
 use crate::server::state::AppState;
 
@@ -26,7 +28,10 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
         .route("/chats", get(list_chats))
-        .route("/chats/:chat_id/messages", get(list_messages))
+        .route(
+            "/chats/:chat_id/messages",
+            get(list_messages).post(send_message),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -119,4 +124,21 @@ pub async fn list_messages(
         }
     };
     Ok(Json(response))
+}
+
+pub async fn send_message(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(chat_id): Path<ChatId>,
+    Json(payload): Json<SendMessageRequest>,
+) -> Result<(StatusCode, Json<SendMessageResponse>), RequestError> {
+    validate_message_text(&payload.text)?;
+    let message_id = state
+        .db_connection
+        .send_message(claims.user_id, chat_id, &payload.text)
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(SendMessageResponse { message_id }),
+    ))
 }
