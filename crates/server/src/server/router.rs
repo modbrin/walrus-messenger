@@ -6,7 +6,6 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::prelude::BASE64_STANDARD as BASE64;
 use base64::Engine;
-use serde::Deserialize;
 use tracing::info;
 
 use crate::auth::token::{AuthPayload, Claims, RefreshPayload, TokenExchangePayload};
@@ -14,6 +13,7 @@ use crate::auth::utils::unpack_session_id_and_token;
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::ChatId;
 use crate::models::chat::ListChatsResponse;
+use crate::models::listing::{ListingMode, ListingQuery};
 use crate::models::message::ListMessagesResponse;
 use crate::models::user::WhoAmIResponse;
 use crate::server::state::AppState;
@@ -76,41 +76,21 @@ pub async fn whoami(claims: Claims) -> Json<WhoAmIResponse> {
     })
 }
 
-const DEFAULT_PAGE_SIZE: i32 = 100;
-const DEFAULT_PAGE_NUM: i32 = 1;
-
-#[derive(Debug, Deserialize)]
-pub struct PaginationQuery {
-    pub page_size: Option<i32>,
-    pub page_num: Option<i32>,
-}
-
-fn resolve_page_params(params: &PaginationQuery) -> Result<(i32, i32), RequestError> {
-    let page_size = params.page_size.unwrap_or(DEFAULT_PAGE_SIZE);
-    if page_size < 1 {
-        return Err(ValidationError::InvalidInput {
-            value: page_size.to_string(),
-            reason: "page_size should be >= 1".to_string(),
-        }
-        .into());
-    }
-    let page_num = params.page_num.unwrap_or(DEFAULT_PAGE_NUM);
-    if page_num < 1 {
-        return Err(ValidationError::InvalidInput {
-            value: page_num.to_string(),
-            reason: "page_num should be >= 1".to_string(),
-        }
-        .into());
-    }
-    Ok((page_size, page_num))
-}
-
 pub async fn list_chats(
     State(state): State<Arc<AppState>>,
     claims: Claims,
-    Query(params): Query<PaginationQuery>,
+    Query(params): Query<ListingQuery>,
 ) -> Result<Json<ListChatsResponse>, RequestError> {
-    let (page_size, page_num) = resolve_page_params(&params)?;
+    let (page_size, page_num) = match ListingMode::from_query(params)? {
+        ListingMode::Page { limit, page } => (limit, page),
+        ListingMode::Offset { .. } => {
+            return Err(ValidationError::InvalidInput {
+                value: "offset".to_string(),
+                reason: "offset mode is not supported for chats listing".to_string(),
+            }
+            .into())
+        }
+    };
     let response = state
         .db_connection
         .list_chats(claims.user_id, page_size, page_num)
@@ -122,12 +102,21 @@ pub async fn list_messages(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(chat_id): Path<ChatId>,
-    Query(params): Query<PaginationQuery>,
+    Query(params): Query<ListingQuery>,
 ) -> Result<Json<ListMessagesResponse>, RequestError> {
-    let (page_size, page_num) = resolve_page_params(&params)?;
-    let response = state
-        .db_connection
-        .list_messages(claims.user_id, chat_id, page_size, page_num)
-        .await?;
+    let response = match ListingMode::from_query(params)? {
+        ListingMode::Offset { offset, limit } => {
+            state
+                .db_connection
+                .list_messages_after(claims.user_id, chat_id, offset, limit)
+                .await?
+        }
+        ListingMode::Page { limit, page } => {
+            state
+                .db_connection
+                .list_messages(claims.user_id, chat_id, limit, page)
+                .await?
+        }
+    };
     Ok(Json(response))
 }

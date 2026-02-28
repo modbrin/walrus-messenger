@@ -162,19 +162,21 @@ paths:
       description: >
         Returns paginated chats visible to current user.
         `display_name` is normalized for UI list usage; for private chats it resolves to peer display name.
+        Uses page mode parameters: `limit` and `page`.
       security:
         - bearerAuth: []
       parameters:
         - in: query
-          name: page_size
+          name: limit
           required: false
           schema:
             type: integer
             format: int32
             minimum: 1
+            maximum: 200
             default: 100
         - in: query
-          name: page_num
+          name: page
           required: false
           schema:
             type: integer
@@ -213,7 +215,9 @@ paths:
       summary: List messages in a chat
       operationId: listMessages
       description: >
-        Returns paginated messages for a chat if current user is a member.
+        Returns messages for a chat if current user is a member.
+        With `offset`, response contains messages with IDs greater than it (incremental mode).
+        Without `offset`, regular page mode (`limit` + `page`) is used.
       security:
         - bearerAuth: []
       parameters:
@@ -224,21 +228,29 @@ paths:
             type: integer
             format: int64
         - in: query
-          name: page_size
+          name: limit
           required: false
           schema:
             type: integer
             format: int32
             minimum: 1
+            maximum: 200
             default: 100
         - in: query
-          name: page_num
+          name: page
           required: false
           schema:
             type: integer
             format: int32
             minimum: 1
             default: 1
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
       responses:
         '200':
           description: Messages page

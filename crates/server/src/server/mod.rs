@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::config::AppConfig;
 use crate::server::state::AppState;
 
+pub mod constants;
 pub mod router;
 pub mod state;
 

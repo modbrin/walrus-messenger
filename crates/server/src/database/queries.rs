@@ -8,7 +8,7 @@ use crate::error::{RequestError, SessionError, ValidationError};
 use crate::models::chat::{
     ChatId, ChatResponse, IsUserInChatResponse, ListChatsResponse, PrivateChatExistsResponse,
 };
-use crate::models::message::{ListMessagesResponse, MessageResponse};
+use crate::models::message::{ListMessagesResponse, MessageId, MessageResponse};
 use crate::models::session::{RefreshTokenResponse, ResolveSessionResponse, SessionId};
 use crate::models::user::{
     GetUserCredentialsByAliasResponse, GetUserIdByAliasResponse, GetUserRoleResponse, UserId,
@@ -31,11 +31,23 @@ impl DbConnection {
         page_size: i32,
         page_num: i32,
     ) -> Result<ListMessagesResponse, RequestError> {
-        if is_user_in_chat(self.pool(), chat_id, user_id).await? {
-            Ok(list_messages_for_user(self.pool(), chat_id, page_size, page_num).await?)
-        } else {
-            Err(ValidationError::NotFound.into())
+        if !is_user_in_chat(self.pool(), chat_id, user_id).await? {
+            return Err(ValidationError::NotFound.into());
         }
+        Ok(list_messages_for_user(self.pool(), chat_id, page_size, page_num).await?)
+    }
+
+    pub async fn list_messages_after(
+        &self,
+        user_id: UserId,
+        chat_id: ChatId,
+        after_message_id: MessageId,
+        limit: i32,
+    ) -> Result<ListMessagesResponse, RequestError> {
+        if !is_user_in_chat(self.pool(), chat_id, user_id).await? {
+            return Err(ValidationError::NotFound.into());
+        }
+        Ok(list_messages_for_user_after(self.pool(), chat_id, after_message_id, limit).await?)
     }
 
     pub async fn resolve_session(
@@ -212,6 +224,35 @@ pub(super) async fn list_messages_for_user<'a, E: PgExecutor<'a>>(
     .bind(chat_id)
     .bind(page_size)
     .bind(page_num)
+    .fetch_all(executor)
+    .await?;
+    Ok(ListMessagesResponse { messages })
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn list_messages_for_user_after<'a, E: PgExecutor<'a>>(
+    executor: E,
+    chat_id: ChatId,
+    after_message_id: MessageId,
+    limit: i32,
+) -> Result<ListMessagesResponse, SqlxError> {
+    let messages: Vec<MessageResponse> = sqlx::query_as(
+        "
+    SELECT
+        messages.id AS id, messages.text AS text, messages.created_at AS created_at, messages.edited_at AS edited_at,
+        messages.user_id as user_id, users.display_name AS user_display_name
+    FROM
+        messages LEFT JOIN users ON messages.user_id = users.id
+    WHERE
+        messages.chat_id = $1 AND messages.id > $2
+    ORDER BY
+        messages.id
+    LIMIT $3;
+    ",
+    )
+    .bind(chat_id)
+    .bind(after_message_id)
+    .bind(limit)
     .fetch_all(executor)
     .await?;
     Ok(ListMessagesResponse { messages })

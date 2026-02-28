@@ -204,6 +204,15 @@ async fn list_messages_pagination() {
         .messages;
     assert_eq!(page_3.len(), 1);
     assert_eq!(page_3[0].text.as_deref(), Some("msg_5"));
+
+    let after_3 = db
+        .list_messages_after(user_a, chat_id, 3, 10)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(after_3.len(), 2);
+    assert_eq!(after_3[0].text.as_deref(), Some("msg_4"));
+    assert_eq!(after_3[1].text.as_deref(), Some("msg_5"));
 }
 
 #[tokio::test]
