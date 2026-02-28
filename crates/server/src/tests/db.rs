@@ -142,6 +142,12 @@ async fn create_private_chat() {
             .count(),
         1
     );
+    let user_a_private_chat = user_a_chats.chats.iter().find(|c| c.id == chat_id).unwrap();
+    assert_eq!(
+        user_a_private_chat.display_name.as_deref(),
+        Some("Le Baguette")
+    );
+
     let user_b_chats = db.list_chats(user_b, 100, 1).await.unwrap();
     assert_eq!(
         user_b_chats
@@ -150,6 +156,11 @@ async fn create_private_chat() {
             .filter(|c| c.kind == ChatKind::Private)
             .count(),
         1
+    );
+    let user_b_private_chat = user_b_chats.chats.iter().find(|c| c.id == chat_id).unwrap();
+    assert_eq!(
+        user_b_private_chat.display_name.as_deref(),
+        Some("Benjamin Dover")
     );
 }
 

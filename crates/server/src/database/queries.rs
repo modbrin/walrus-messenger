@@ -120,11 +120,19 @@ pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
     let chats: Vec<ChatResponse> = sqlx::query_as(
         "
     SELECT
-        chats.id AS id, chats.display_name AS display_name, chats.kind AS kind
+        chats.id AS id,
+        COALESCE(chats.display_name, peer.display_name) AS display_name,
+        chats.kind AS kind
     FROM
-        chats_members JOIN chats ON chats_members.chat_id = chats.id
+        chats_members self_member
+        JOIN chats ON self_member.chat_id = chats.id
+        LEFT JOIN chats_members peer_member
+            ON chats.kind = 'private'
+            AND peer_member.chat_id = chats.id
+            AND peer_member.user_id != self_member.user_id
+        LEFT JOIN users peer ON peer.id = peer_member.user_id
     WHERE
-        chats_members.user_id = $1
+        self_member.user_id = $1
     ORDER BY
         chats.id
     LIMIT $2 OFFSET ($3 - 1) * $2;

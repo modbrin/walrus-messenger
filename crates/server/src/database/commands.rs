@@ -85,8 +85,45 @@ impl DbConnection {
     }
 
     #[instrument(skip(self))]
-    pub async fn create_group_chat(&self) -> Result<(), RequestError> {
-        todo!()
+    pub async fn create_group_chat(
+        &self,
+        caller: UserId,
+        display_name: &str,
+    ) -> Result<ChatId, RequestError> {
+        // TODO: this helper is test-seeding oriented for now; add proper validation and role model before public API use
+        let mut transaction = self.pool().begin().await?;
+        let chat_id = create_chat(
+            transaction.as_mut(),
+            Some(display_name),
+            None,
+            ChatKind::Group,
+        )
+        .await?;
+        add_member_to_chat(transaction.as_mut(), caller, chat_id, ChatRole::Owner).await?;
+        transaction.commit().await?;
+        Ok(chat_id)
+    }
+
+    #[instrument(skip(self, members))]
+    pub async fn add_members_to_group_chat(
+        &self,
+        caller: UserId,
+        chat_id: ChatId,
+        members: &[UserId],
+    ) -> Result<(), RequestError> {
+        // TODO: this helper is test-seeding oriented for now; enforce owner/admin checks and membership policy before public API use
+        if !is_user_in_chat(self.pool(), chat_id, caller).await? {
+            return Err(ValidationError::NotFound.into());
+        }
+        let mut transaction = self.pool().begin().await?;
+        for member in members {
+            if *member == caller {
+                continue;
+            }
+            add_member_to_chat(transaction.as_mut(), *member, chat_id, ChatRole::Member).await?;
+        }
+        transaction.commit().await?;
+        Ok(())
     }
 
     #[instrument(skip(self))]

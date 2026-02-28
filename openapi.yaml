@@ -9,6 +9,7 @@ servers:
     description: Local default from config.yaml
 tags:
   - name: auth
+  - name: messaging
 paths:
   /auth/login:
     post:
@@ -153,6 +154,59 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /chats:
+    get:
+      tags: [messaging]
+      summary: List chats for current user
+      operationId: listChats
+      description: >
+        Returns paginated chats visible to current user.
+        `display_name` is normalized for UI list usage; for private chats it resolves to peer display name.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: page_size
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            default: 100
+        - in: query
+          name: page_num
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            default: 1
+      responses:
+        '200':
+          description: Chats page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListChatsResponse'
+        '400':
+          description: Invalid query params or malformed token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -216,6 +270,34 @@ components:
         access_token_expires_at:
           type: string
           format: date-time
+
+    ChatKind:
+      type: string
+      enum: [with_self, private, group, channel]
+
+    ChatResponse:
+      type: object
+      additionalProperties: false
+      required: [id, display_name, kind]
+      properties:
+        id:
+          type: integer
+          format: int64
+        display_name:
+          type: string
+          nullable: true
+        kind:
+          $ref: '#/components/schemas/ChatKind'
+
+    ListChatsResponse:
+      type: object
+      additionalProperties: false
+      required: [chats]
+      properties:
+        chats:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatResponse'
 
     ErrorResponse:
       type: object

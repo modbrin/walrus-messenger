@@ -1,10 +1,13 @@
+use serde::Serialize;
+
 use crate::models::user::UserId;
 
 pub type ChatId = i64;
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, sqlx::Type)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
 #[sqlx(type_name = "chat_kind")]
 #[sqlx(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum ChatKind {
     WithSelf,
     Private,
@@ -28,14 +31,14 @@ pub struct ListChatsRequest {
     pub page_num: i32,
 }
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
 pub struct ChatResponse {
     pub id: ChatId,
     pub display_name: Option<String>,
     pub kind: ChatKind,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ListChatsResponse {
     pub chats: Vec<ChatResponse>,
 }
