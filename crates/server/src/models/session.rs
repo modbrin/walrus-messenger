@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use crate::auth::token::SessionToken;
 use crate::models::user::UserId;
 
-pub type SessionId = sqlx::types::Uuid;
+pub type SessionId = uuid::Uuid;
 
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct ResolveSessionResponse {

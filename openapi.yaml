@@ -4,15 +4,13 @@ info:
   version: 0.1.0
   description: |
     Implemented HTTP API only (current server state).
-    This spec intentionally excludes planned/proposed routes.
 servers:
   - url: http://127.0.0.1:3000
     description: Local default from config.yaml
 tags:
   - name: auth
-  - name: system
 paths:
-  /login:
+  /auth/login:
     post:
       tags: [auth]
       summary: Login and create session
@@ -49,22 +47,21 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /protected:
+  /auth/whoami:
     get:
-      tags: [system]
-      summary: Access-token validation probe
-      operationId: protectedProbe
-      description: Resolves bearer access token and returns greeting with authenticated user id.
+      tags: [auth]
+      summary: Resolve current user by access token
+      operationId: whoAmI
+      description: Validates bearer access token and returns authenticated user id.
       security:
         - bearerAuth: []
       responses:
         '200':
           description: Token valid
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
-              example: Hello, 1!
+                $ref: '#/components/schemas/WhoAmIResponse'
         '400':
           description: Missing or malformed bearer token
           content:
@@ -73,6 +70,76 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 error: Missing or bad token in request
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh session tokens
+      operationId: refreshSession
+      description: >
+        Rotates both access and refresh tokens using current refresh token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshPayload'
+      responses:
+        '200':
+          description: Tokens rotated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenExchangePayload'
+        '401':
+          description: Bad or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Concurrent refresh interrupted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Logout current session
+      operationId: logoutSession
+      description: Invalidates the current authenticated session.
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Session invalidated
+        '400':
+          description: Missing or malformed bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Token expired or not found
           content:
@@ -108,6 +175,25 @@ components:
           type: string
           nullable: true
           description: Currently accepted but not used by backend logic.
+
+    RefreshPayload:
+      type: object
+      additionalProperties: false
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          description: Opaque refresh token returned by /auth/login or /auth/refresh.
+
+    WhoAmIResponse:
+      type: object
+      additionalProperties: false
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          format: int32
 
     TokenExchangePayload:
       type: object

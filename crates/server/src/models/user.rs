@@ -1,3 +1,4 @@
+use serde::Serialize;
 use strum_macros::Display;
 
 use crate::error::ValidationError;
@@ -7,6 +8,11 @@ const USER_DISPLAY_NAME_LENGTH_LIMIT: usize = 30;
 const USER_ALIAS_LENGTH_LIMIT: usize = 30;
 const USER_PASSWORD_MIN_LENGTH: usize = 8;
 const USER_PASSWORD_MAX_LENGTH: usize = 80;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WhoAmIResponse {
+    pub user_id: UserId,
+}
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Display, sqlx::Type)]
 #[sqlx(type_name = "user_role")]

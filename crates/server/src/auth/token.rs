@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use axum::extract::{FromRef, FromRequestParts};
+use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::{async_trait, RequestPartsExt};
 use axum_extra::headers::authorization::Bearer;
@@ -20,9 +18,10 @@ use crate::server::state::AppState;
 
 pub type SessionToken = Vec<u8>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct Claims {
     pub user_id: UserId,
+    pub session_id: SessionId,
 }
 
 #[async_trait]
@@ -53,7 +52,10 @@ where
             .db_connection
             .resolve_session(&sid, access_token)
             .await?;
-        Ok(Claims { user_id })
+        Ok(Claims {
+            user_id,
+            session_id: sid,
+        })
     }
 }
 
@@ -89,4 +91,9 @@ pub struct AuthPayload {
     pub alias: String,
     pub password: String,
     pub session_id: Option<String>, // TODO: use
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RefreshPayload {
+    pub refresh_token: String,
 }
