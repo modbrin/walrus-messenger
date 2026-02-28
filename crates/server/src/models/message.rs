@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 use crate::models::user::UserId;
 
 pub type MessageId = i64;
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
 pub struct MessageResponse {
     pub id: MessageId,
     pub text: Option<String>,
@@ -15,7 +16,7 @@ pub struct MessageResponse {
     // pub resource_url: Option<ResourceId>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ListMessagesResponse {
     pub messages: Vec<MessageResponse>,
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -12,7 +12,9 @@ use tracing::info;
 use crate::auth::token::{AuthPayload, Claims, RefreshPayload, TokenExchangePayload};
 use crate::auth::utils::unpack_session_id_and_token;
 use crate::error::{RequestError, ValidationError};
+use crate::models::chat::ChatId;
 use crate::models::chat::ListChatsResponse;
+use crate::models::message::ListMessagesResponse;
 use crate::models::user::WhoAmIResponse;
 use crate::server::state::AppState;
 
@@ -24,6 +26,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
         .route("/chats", get(list_chats))
+        .route("/chats/:chat_id/messages", get(list_messages))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -77,12 +80,12 @@ const DEFAULT_PAGE_SIZE: i32 = 100;
 const DEFAULT_PAGE_NUM: i32 = 1;
 
 #[derive(Debug, Deserialize)]
-pub struct ListChatsRequest {
+pub struct PaginationQuery {
     pub page_size: Option<i32>,
     pub page_num: Option<i32>,
 }
 
-fn resolve_page_params(params: &ListChatsRequest) -> Result<(i32, i32), RequestError> {
+fn resolve_page_params(params: &PaginationQuery) -> Result<(i32, i32), RequestError> {
     let page_size = params.page_size.unwrap_or(DEFAULT_PAGE_SIZE);
     if page_size < 1 {
         return Err(ValidationError::InvalidInput {
@@ -105,12 +108,26 @@ fn resolve_page_params(params: &ListChatsRequest) -> Result<(i32, i32), RequestE
 pub async fn list_chats(
     State(state): State<Arc<AppState>>,
     claims: Claims,
-    Query(params): Query<ListChatsRequest>,
+    Query(params): Query<PaginationQuery>,
 ) -> Result<Json<ListChatsResponse>, RequestError> {
     let (page_size, page_num) = resolve_page_params(&params)?;
     let response = state
         .db_connection
         .list_chats(claims.user_id, page_size, page_num)
+        .await?;
+    Ok(Json(response))
+}
+
+pub async fn list_messages(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(chat_id): Path<ChatId>,
+    Query(params): Query<PaginationQuery>,
+) -> Result<Json<ListMessagesResponse>, RequestError> {
+    let (page_size, page_num) = resolve_page_params(&params)?;
+    let response = state
+        .db_connection
+        .list_messages(claims.user_id, chat_id, page_size, page_num)
         .await?;
     Ok(Json(response))
 }

@@ -165,6 +165,48 @@ async fn create_private_chat() {
 }
 
 #[tokio::test]
+async fn list_messages_pagination() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let user_a = invite_regular(&db, "pager_a", "pagerpassa", "Pager A").await;
+    let _user_b = invite_regular(&db, "pager_b", "pagerpassb", "Pager B").await;
+    let chat_id = db.create_private_chat(user_a, "pager_b").await.unwrap();
+
+    db.send_message(user_a, chat_id, "msg_1").await.unwrap();
+    db.send_message(user_a, chat_id, "msg_2").await.unwrap();
+    db.send_message(user_a, chat_id, "msg_3").await.unwrap();
+    db.send_message(user_a, chat_id, "msg_4").await.unwrap();
+    db.send_message(user_a, chat_id, "msg_5").await.unwrap();
+
+    let page_1 = db
+        .list_messages(user_a, chat_id, 2, 1)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(page_1.len(), 2);
+    assert_eq!(page_1[0].text.as_deref(), Some("msg_1"));
+    assert_eq!(page_1[1].text.as_deref(), Some("msg_2"));
+
+    let page_2 = db
+        .list_messages(user_a, chat_id, 2, 2)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(page_2.len(), 2);
+    assert_eq!(page_2[0].text.as_deref(), Some("msg_3"));
+    assert_eq!(page_2[1].text.as_deref(), Some("msg_4"));
+
+    let page_3 = db
+        .list_messages(user_a, chat_id, 2, 3)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(page_3.len(), 1);
+    assert_eq!(page_3[0].text.as_deref(), Some("msg_5"));
+}
+
+#[tokio::test]
 async fn login_and_resolve_session() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
