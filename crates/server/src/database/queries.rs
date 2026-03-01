@@ -113,7 +113,7 @@ pub(super) async fn get_user_credentials_by_alias<'a, E: PgExecutor<'a>>(
 ) -> Result<Option<GetUserCredentialsByAliasResponse>, SqlxError> {
     let result = sqlx::query_as(
         "
-    SELECT id AS user_id, password_hash, password_salt FROM users WHERE alias = $1;
+    SELECT id AS user_id, password_hash FROM users WHERE alias = $1;
     ",
     )
     .bind(alias)
@@ -129,7 +129,7 @@ pub(super) async fn get_user_credentials_by_user_id<'a, E: PgExecutor<'a>>(
 ) -> Result<Option<GetUserCredentialsByAliasResponse>, SqlxError> {
     let result = sqlx::query_as(
         "
-    SELECT id AS user_id, password_hash, password_salt FROM users WHERE id = $1;
+    SELECT id AS user_id, password_hash FROM users WHERE id = $1;
     ",
     )
     .bind(user_id)

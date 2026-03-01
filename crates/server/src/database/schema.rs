@@ -4,25 +4,22 @@ use sqlx::migrate::Migrator;
 use sqlx::{Error as SqlxError, Postgres, Transaction};
 use tracing::info;
 
-use crate::auth::utils::{generate_default_password, generate_salt, hash_password_sha256};
-use crate::database::commands::create_user;
+use crate::auth::utils::{generate_default_password, hash_password};
+use crate::database::commands::{create_user, create_with_self_chat};
 use crate::database::connection::DbConnection;
-use crate::models::user::UserId;
-use crate::models::user::{CreateUserRequest, UserRole};
+use crate::models::user::{CreateUserRequest, UserId, UserRole};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 fn default_origin_user() -> (CreateUserRequest, String) {
     let generated_password = generate_default_password();
-    let salt = generate_salt();
-    let hash = hash_password_sha256(&generated_password, salt);
+    let hash = hash_password(&generated_password);
     (
         CreateUserRequest {
             alias: "origin".to_string(),
             display_name: "Origin User".to_string(),
             role: UserRole::Admin,
             password_hash: hash,
-            password_salt: salt,
             invited_by: None,
         },
         generated_password,
@@ -78,12 +75,12 @@ pub async fn create_origin_user(
         transaction.as_mut(),
         &user.alias,
         &user.display_name,
-        &user.password_salt,
         &user.password_hash,
         user.role,
         user.invited_by,
     )
     .await?;
+    let _ = create_with_self_chat(transaction, origin_user_id).await?;
     sqlx::query(
         "
         INSERT INTO system_state (singleton, origin_user_id)

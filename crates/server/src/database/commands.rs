@@ -7,8 +7,8 @@ use tracing::{debug, info, instrument};
 
 use crate::auth::token::TokenExchangePayload;
 use crate::auth::utils::{
-    current_time, generate_salt, generate_session_token, hash_password_sha256,
-    new_access_token_expiration, new_refresh_token_expiration,
+    current_time, generate_session_token, hash_password, new_access_token_expiration,
+    new_refresh_token_expiration, verify_password,
 };
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
@@ -30,7 +30,7 @@ use crate::models::user::{
 pub const MAX_SESSIONS_PER_USER: i32 = 100;
 
 impl DbConnection {
-    #[instrument(skip(self))]
+    #[instrument(skip(self, request))]
     pub async fn invite_user(
         &self,
         caller: UserId,
@@ -49,13 +49,11 @@ impl DbConnection {
         validate_user_alias(&request.alias)?;
         validate_user_display_name(&request.display_name)?;
         validate_user_password(&request.initial_password)?;
-        let password_salt = generate_salt();
-        let password_hash = hash_password_sha256(&request.initial_password, password_salt);
+        let password_hash = hash_password(&request.initial_password);
         let user_id = create_user(
             transaction.as_mut(),
             &request.alias,
             &request.display_name,
-            &password_salt,
             &password_hash,
             request.role,
             Some(caller),
@@ -144,12 +142,11 @@ impl DbConnection {
         else {
             return Err(ValidationError::NotFound.into());
         };
-        if hash_password_sha256(current_password, creds.password_salt) != creds.password_hash {
+        if !verify_password(current_password, &creds.password_hash) {
             return Err(RequestError::BadCredentials);
         }
-        let new_salt = generate_salt();
-        let new_hash = hash_password_sha256(new_password, new_salt);
-        update_user_password(transaction.as_mut(), caller, &new_salt, &new_hash).await?;
+        let new_hash = hash_password(new_password);
+        update_user_password(transaction.as_mut(), caller, &new_hash).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -183,7 +180,7 @@ impl DbConnection {
         let Some(creds) = get_user_credentials_by_alias(transaction.as_mut(), alias).await? else {
             return Err(RequestError::BadCredentials);
         };
-        if hash_password_sha256(password, creds.password_salt) != creds.password_hash {
+        if !verify_password(password, &creds.password_hash) {
             return Err(RequestError::BadCredentials);
         }
         let refresh_token = generate_session_token();
@@ -263,23 +260,23 @@ impl DbConnection {
     }
 }
 
-#[instrument(skip(executor))]
+#[instrument(skip(executor, password_hash))]
 pub(super) async fn create_user<'a, E: PgExecutor<'a>>(
     executor: E,
     alias: &str,
     display_name: &str,
-    password_salt: &[u8],
-    password_hash: &[u8],
+    password_hash: &str,
     role: UserRole,
     invited_by: Option<UserId>,
 ) -> Result<UserId, SqlxError> {
-    let result = sqlx::query("
-        INSERT INTO users (alias, display_name, password_salt, password_hash, role, invited_by, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, current_timestamp) RETURNING id;
-    ")
+    let result = sqlx::query(
+        "
+        INSERT INTO users (alias, display_name, password_hash, role, invited_by, created_at)
+        VALUES ($1, $2, $3, $4, $5, current_timestamp) RETURNING id;
+    ",
+    )
     .bind(alias)
     .bind(display_name)
-    .bind(password_salt)
     .bind(password_hash)
     .bind(role)
     .bind(invited_by)
@@ -313,21 +310,19 @@ pub(super) async fn create_chat<'a, E: PgExecutor<'a>>(
     Ok(result)
 }
 
-#[instrument(skip(executor, password_salt, password_hash))]
+#[instrument(skip(executor, password_hash))]
 pub(super) async fn update_user_password<'a, E: PgExecutor<'a>>(
     executor: E,
     user_id: UserId,
-    password_salt: &[u8],
-    password_hash: &[u8],
+    password_hash: &str,
 ) -> Result<(), SqlxError> {
     sqlx::query(
         "
         UPDATE users
-        SET password_salt = $1, password_hash = $2
-        WHERE id = $3;
+        SET password_hash = $1
+        WHERE id = $2;
     ",
     )
-    .bind(password_salt)
     .bind(password_hash)
     .bind(user_id)
     .execute(executor)

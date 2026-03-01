@@ -27,8 +27,7 @@ pub struct CreateUserRequest {
     pub alias: String,
     pub display_name: String,
     pub role: UserRole,
-    pub password_salt: [u8; 16],
-    pub password_hash: [u8; 32],
+    pub password_hash: String,
     pub invited_by: Option<UserId>,
 }
 
@@ -53,8 +52,7 @@ pub struct GetUserIdByAliasResponse {
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct GetUserCredentialsByAliasResponse {
     pub user_id: UserId,
-    pub password_salt: [u8; 16],
-    pub password_hash: [u8; 32],
+    pub password_hash: String,
 }
 
 // TODO: remove

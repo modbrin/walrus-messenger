@@ -60,7 +60,7 @@ async fn create_chat_with_self() {
 
     let chats = db.list_chats(user_a, 100, 1).await.unwrap().chats;
     assert_eq!(chats.len(), 1);
-    assert_eq!(chats[0].id, 1);
+    assert_eq!(chats[0].id, 2);
     assert_eq!(chats[0].display_name, None);
     assert_eq!(chats[0].kind, ChatKind::WithSelf);
 

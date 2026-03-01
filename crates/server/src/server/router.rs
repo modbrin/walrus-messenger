@@ -13,8 +13,7 @@ use crate::auth::token::{
 };
 use crate::auth::utils::unpack_session_id_and_token;
 use crate::error::{RequestError, ValidationError};
-use crate::models::chat::ChatId;
-use crate::models::chat::ListChatsResponse;
+use crate::models::chat::{ChatId, ListChatsResponse};
 use crate::models::listing::{ListingMode, ListingQuery};
 use crate::models::message::{
     validate_message_text, ListMessagesResponse, SendMessageRequest, SendMessageResponse,

@@ -1,16 +1,28 @@
+use argon2::password_hash::rand_core::OsRng as PasswordOsRng;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::Argon2;
 use chrono::{DateTime, Utc};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::OsRng;
 use rand::RngCore;
-use sha2::{Digest, Sha256};
 
 use crate::models::session::SessionId;
 
-pub fn hash_password_sha256(password: &str, salt: [u8; 16]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(password.as_bytes());
-    hash.update(salt);
-    hash.finalize().into()
+pub fn hash_password(password: &str) -> String {
+    let salt = SaltString::generate(&mut PasswordOsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("argon2 default configuration should always hash valid input")
+        .to_string()
+}
+
+pub fn verify_password(password: &str, hash: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
 }
 
 #[inline]
@@ -18,11 +30,6 @@ fn secure_random_bytes<const S: usize>() -> [u8; S] {
     let mut buf = [0u8; S];
     OsRng.fill_bytes(&mut buf);
     buf
-}
-
-#[inline]
-pub fn generate_salt() -> [u8; 16] {
-    secure_random_bytes()
 }
 
 #[inline]
