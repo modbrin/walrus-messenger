@@ -26,7 +26,7 @@ Top-level files: `config.yaml` (local runtime config), `db_manual.txt` (Postgres
 Server tests expect a local Postgres database and credentials matching `config.yaml`/`db_manual.txt`.
 
 ## Coding Style & Naming Conventions
-- Rust edition: 2021; format before PRs with `cargo fmt --all`.
+- Rust edition: 2021; format before PRs with `cargo +nightly fmt --all`.
 - Use 4-space indentation and standard Rust naming:
   - modules/files/functions: `snake_case`
   - structs/enums/traits: `PascalCase`

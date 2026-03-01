@@ -46,6 +46,7 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AuthPayload>,
 ) -> Result<Json<TokenExchangePayload>, RequestError> {
+    state.rate_limiter.check_login_alias(&payload.alias)?;
     let payload = state
         .db_connection
         .login(&payload.alias, &payload.password)
@@ -62,6 +63,7 @@ pub async fn refresh(
         .map_err(|_| RequestError::BadCredentials)?;
     let (session_id, refresh_token) =
         unpack_session_id_and_token(&packed_bytes).ok_or(RequestError::BadCredentials)?;
+    state.rate_limiter.check_refresh_session(session_id)?;
     let payload = state
         .db_connection
         .refresh_session(&session_id, refresh_token)
@@ -82,6 +84,9 @@ pub async fn change_password(
     claims: Claims,
     Json(payload): Json<ChangePasswordPayload>,
 ) -> Result<StatusCode, RequestError> {
+    state
+        .rate_limiter
+        .check_change_password_user(claims.user_id)?;
     state
         .db_connection
         .change_password(

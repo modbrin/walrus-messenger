@@ -11,6 +11,8 @@ use crate::models::user::UserRole;
 pub enum RequestError {
     #[error("bad auth or refresh credentials")]
     BadCredentials,
+    #[error("rate limit exceeded for {0}")]
+    RateLimited(&'static str),
     #[error("interrupted operation")]
     Interrupted,
     #[error("operation is not valid anymore, likely requires session refresh or re-login")]
@@ -60,6 +62,7 @@ impl IntoResponse for RequestError {
             },
             Self::Validation(e) => (StatusCode::BAD_REQUEST, e.to_string()),
             e @ Self::BadCredentials => (StatusCode::UNAUTHORIZED, e.to_string()),
+            e @ Self::RateLimited(_) => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
             e @ Self::Interrupted => (StatusCode::CONFLICT, e.to_string()),
             e @ Self::Expired => (StatusCode::UNAUTHORIZED, e.to_string()),
         };
