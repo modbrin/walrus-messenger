@@ -6,7 +6,7 @@ info:
     Implemented HTTP API only (current server state).
 servers:
   - url: http://127.0.0.1:3000
-    description: Local default from config.yaml
+    description: Local default (pass `--address 0.0.0.0:3000` on startup)
 tags:
   - name: auth
   - name: messaging

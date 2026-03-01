@@ -26,8 +26,12 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:3000:3000"
-    volumes:
-      - ./config.yaml:/app/config.yaml:ro
+    command: ["--address", "0.0.0.0:3000"]
+    environment:
+      WALRUS_DB_USERNAME: ${POSTGRES_USER:-walrus_app}
+      WALRUS_DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      WALRUS_DB_NAME: ${POSTGRES_DB:-walrus_db}
+      WALRUS_DB_ADDRESS: postgres
     networks:
       - walrus
 

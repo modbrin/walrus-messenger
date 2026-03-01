@@ -14,16 +14,16 @@ Inside `crates/server/src`:
 - `models/`: typed domain models (`user`, `chat`, `message`, `session`, `resource`).
 - `tests/`: integration-style async tests for auth, sessions, chats, and messages.
 
-Top-level files: `config.yaml` (local runtime config), `db_manual.txt` (Postgres setup notes), and `assets/` (static resources).
+Top-level files: `db_manual.txt` (Postgres setup notes), `openapi.yaml`, and `assets/` (static resources).
 
 ## Build, Test, and Development Commands
 - `cargo check --workspace`: type-check all workspace crates.
 - `cargo build --workspace`: compile all targets.
-- `cargo run -p walrus-server`: run backend on the address from `config.yaml` (default `0.0.0.0:3000`).
+- `WALRUS_DB_USERNAME=walrus_guest WALRUS_DB_PASSWORD=walruspass WALRUS_DB_NAME=walrus_db cargo run -p walrus-server -- --address 0.0.0.0:3000`: run backend locally.
 - `cargo test -p walrus-server -q`: run server tests.
 - `cargo test -p walrus-server login_and_resolve_session -- --nocapture`: run one test while iterating.
 
-Server tests expect a local Postgres database and credentials matching `config.yaml`/`db_manual.txt`.
+Server tests expect a local Postgres database (see `db_manual.txt`).
 
 ## Coding Style & Naming Conventions
 - Rust edition: 2021; format before PRs with `cargo +nightly fmt --all`.
@@ -45,5 +45,5 @@ Server tests expect a local Postgres database and credentials matching `config.y
 - Schema/bootstrap logic lives in `database/schema.rs`; origin admin user is created there.
 
 ## Security & Configuration Tips
-- Do not commit real secrets; `config.yaml` values are local defaults only.
+- Do not commit real secrets; use environment variables for runtime credentials.
 - Keep database permissions minimal for app users, and document any new required grants/extensions.

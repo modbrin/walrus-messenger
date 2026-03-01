@@ -139,7 +139,6 @@ chown -R walrus:walrus /opt/walrus
 
 Place these files into `/opt/walrus`:
 - `docker-compose.yml` (from this repository)
-- `config.yaml` (server config with DB host `postgres`)
 - `.env` (runtime secrets and image config)
 
 Example `.env`:
@@ -150,8 +149,8 @@ POSTGRES_DB=walrus_db
 POSTGRES_USER=walrus_app
 POSTGRES_PASSWORD=<strong-password>
 ```
-
-`config.yaml` must match DB values and use `address: postgres`.
+`walrus-server` reads DB credentials from environment variables and is started by
+compose with `--address 0.0.0.0:3000`.
 
 ## 6. Nginx Reverse Proxy + TLS
 
