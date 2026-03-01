@@ -198,19 +198,22 @@ pub(super) async fn private_chat_exists<'a, E: PgExecutor<'a>>(
     user_id_a: UserId,
     user_id_b: UserId,
 ) -> Result<bool, SqlxError> {
+    let (user_id_low, user_id_high) = if user_id_a < user_id_b {
+        (user_id_a, user_id_b)
+    } else {
+        (user_id_b, user_id_a)
+    };
     let result: PrivateChatExistsResponse = sqlx::query_as(
         "
     SELECT EXISTS(
-        SELECT
-            1
-        FROM
-            chats_members a JOIN chats_members b ON a.chat_id = b.chat_id AND a.user_id != b.user_id
-        WHERE a.user_id = $1 AND b.user_id = $2
+        SELECT 1
+        FROM private_chats
+        WHERE user_id_low = $1 AND user_id_high = $2
     ) as chat_exists;
     ",
     )
-    .bind(user_id_a)
-    .bind(user_id_b)
+    .bind(user_id_low)
+    .bind(user_id_high)
     .fetch_one(executor)
     .await?;
     Ok(result.chat_exists)

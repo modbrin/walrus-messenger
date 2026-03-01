@@ -13,7 +13,7 @@ use crate::auth::utils::{
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
     get_refresh_token, get_user_credentials_by_alias, get_user_credentials_by_user_id,
-    get_user_id_by_alias, get_user_role, is_user_in_chat, private_chat_exists,
+    get_user_id_by_alias, get_user_role, is_user_in_chat,
 };
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::{ChatId, ChatKind, ChatRole};
@@ -73,11 +73,27 @@ impl DbConnection {
         let recipient_id = get_user_id_by_alias(self.pool(), recipient_alias)
             .await?
             .user_id;
-        if private_chat_exists(self.pool(), caller, recipient_id).await? {
-            return Err(ValidationError::AlreadyExists.into());
+        if recipient_id == caller {
+            return Err(ValidationError::InvalidInput {
+                value: recipient_alias.to_string(),
+                reason: "cannot create private chat with yourself".to_string(),
+            }
+            .into());
         }
         let mut transaction = self.pool().begin().await?;
-        let chat_id = create_private_chat(&mut transaction, caller, recipient_id).await?;
+        let chat_id = match create_private_chat(&mut transaction, caller, recipient_id).await {
+            Ok(chat_id) => chat_id,
+            Err(error) => {
+                if let SqlxError::Database(db_error) = &error {
+                    if db_error.is_unique_violation()
+                        && db_error.constraint() == Some("private_chat_pair_unique")
+                    {
+                        return Err(ValidationError::AlreadyExists.into());
+                    }
+                }
+                return Err(error.into());
+            }
+        };
         transaction.commit().await?;
         Ok(chat_id)
     }
@@ -397,10 +413,37 @@ pub(super) async fn create_private_chat<'a>(
     recipient: UserId,
 ) -> Result<ChatId, SqlxError> {
     let chat_id = create_chat(transaction.as_mut(), None, None, ChatKind::Private).await?;
+    create_private_chat_membership(transaction.as_mut(), chat_id, caller, recipient).await?;
     add_member_to_chat(transaction.as_mut(), caller, chat_id, ChatRole::Member).await?;
     add_member_to_chat(transaction.as_mut(), recipient, chat_id, ChatRole::Member).await?;
     debug!("created private chat");
     Ok(chat_id)
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn create_private_chat_membership<'a, E: PgExecutor<'a>>(
+    executor: E,
+    chat_id: ChatId,
+    user_id_a: UserId,
+    user_id_b: UserId,
+) -> Result<(), SqlxError> {
+    let (user_id_low, user_id_high) = if user_id_a < user_id_b {
+        (user_id_a, user_id_b)
+    } else {
+        (user_id_b, user_id_a)
+    };
+    sqlx::query(
+        "
+        INSERT INTO private_chats (chat_id, user_id_low, user_id_high)
+        VALUES ($1, $2, $3);
+    ",
+    )
+    .bind(chat_id)
+    .bind(user_id_low)
+    .bind(user_id_high)
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 #[instrument(skip_all, fields(user_id, ip))]
