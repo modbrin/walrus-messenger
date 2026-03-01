@@ -123,6 +123,22 @@ pub(super) async fn get_user_credentials_by_alias<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
+pub(super) async fn get_user_credentials_by_user_id<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+) -> Result<Option<GetUserCredentialsByAliasResponse>, SqlxError> {
+    let result = sqlx::query_as(
+        "
+    SELECT id AS user_id, password_hash, password_salt FROM users WHERE id = $1;
+    ",
+    )
+    .bind(user_id)
+    .fetch_one(executor)
+    .await;
+    map_not_found_as_none(result)
+}
+
+#[instrument(skip(executor))]
 pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
     executor: E,
     user_id: UserId,

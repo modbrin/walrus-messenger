@@ -251,6 +251,33 @@ async fn login_and_resolve_session() {
 }
 
 #[tokio::test]
+async fn change_password() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let (alias, pass, name) = ("existing_user_a", "existing_password_a", "User A");
+    let user_id = invite_regular(&db, alias, pass, name).await;
+    let new_password = "updated_password_a";
+
+    let result = db
+        .change_password(user_id, "wrong_current_password", new_password)
+        .await
+        .unwrap_err();
+    assert!(matches!(result, RequestError::BadCredentials));
+
+    db.change_password(user_id, pass, new_password)
+        .await
+        .unwrap();
+
+    let old_login_result = db.login(alias, pass).await.unwrap_err();
+    assert!(matches!(old_login_result, RequestError::BadCredentials));
+
+    let new_login_result = db.login(alias, new_password).await.unwrap();
+    let resolved_user = resolve_session(&db, &new_login_result).await.unwrap();
+    assert_eq!(resolved_user, user_id);
+}
+
+#[tokio::test]
 async fn limit_sessions_count() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;

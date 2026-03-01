@@ -154,6 +154,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /auth/change-password:
+    post:
+      tags: [auth]
+      summary: Change current user password
+      operationId: changePassword
+      description: Validates current password and updates it to a new value.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordPayload'
+      responses:
+        '204':
+          description: Password changed
+        '400':
+          description: Missing or malformed bearer token, or invalid new password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or current password mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /chats:
     get:
       tags: [messaging]
@@ -366,6 +402,19 @@ components:
           type: string
           minLength: 1
           description: Opaque refresh token returned by /auth/login or /auth/refresh.
+
+    ChangePasswordPayload:
+      type: object
+      additionalProperties: false
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+        new_password:
+          type: string
+          minLength: 8
+          maxLength: 80
 
     WhoAmIResponse:
       type: object

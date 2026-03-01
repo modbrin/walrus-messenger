@@ -1,172 +1,80 @@
 use std::string::ToString;
 
+use sqlx::migrate::Migrator;
 use sqlx::{Error as SqlxError, Postgres, Transaction};
-use tracing::instrument;
+use tracing::info;
 
-use crate::auth::utils::{generate_salt, hash_password_sha256};
+use crate::auth::utils::{generate_default_password, generate_salt, hash_password_sha256};
 use crate::database::commands::create_user;
 use crate::database::connection::DbConnection;
+use crate::models::user::UserId;
 use crate::models::user::{CreateUserRequest, UserRole};
 
-fn default_origin_user() -> CreateUserRequest {
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+fn default_origin_user() -> (CreateUserRequest, String) {
+    let generated_password = generate_default_password();
     let salt = generate_salt();
-    let hash = hash_password_sha256("changepassword", salt);
-    CreateUserRequest {
-        alias: "origin".to_string(),
-        display_name: "Origin User".to_string(),
-        role: UserRole::Admin,
-        password_hash: hash,
-        password_salt: salt,
-        invited_by: None,
-    }
+    let hash = hash_password_sha256(&generated_password, salt);
+    (
+        CreateUserRequest {
+            alias: "origin".to_string(),
+            display_name: "Origin User".to_string(),
+            role: UserRole::Admin,
+            password_hash: hash,
+            password_salt: salt,
+            invited_by: None,
+        },
+        generated_password,
+    )
 }
 
 impl DbConnection {
     pub async fn init_schema(&self) -> Result<(), SqlxError> {
+        MIGRATOR.run(self.pool()).await?;
+        info!("database migrations applied");
+        self.ensure_origin_user_exists().await?;
+        Ok(())
+    }
+
+    pub async fn drop_schema(&self) -> Result<(), SqlxError> {
+        // Revert all applied reversible migrations (versions > -1 includes 0-prefixed migration).
+        MIGRATOR.undo(self.pool(), -1).await?;
+        Ok(())
+    }
+
+    async fn ensure_origin_user_exists(&self) -> Result<(), SqlxError> {
+        let origin_user_id = sqlx::query_scalar::<_, UserId>(
+            "SELECT origin_user_id FROM system_state WHERE singleton = TRUE;",
+        )
+        .fetch_optional(self.pool())
+        .await?;
+        if let Some(origin_user_id) = origin_user_id {
+            let origin_exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1);")
+                    .bind(origin_user_id)
+                    .fetch_one(self.pool())
+                    .await?;
+            if origin_exists {
+                return Ok(());
+            }
+            return Err(SqlxError::Protocol(
+                "system_state.origin_user_id points to missing user".to_string(),
+            ));
+        }
+
         let mut transaction = self.pool().begin().await?;
-        create_all_types(&mut transaction).await?;
-        create_all_tables(&mut transaction).await?;
         create_origin_user(&mut transaction).await?;
         transaction.commit().await?;
         Ok(())
     }
-    pub async fn drop_schema(&self) -> Result<(), SqlxError> {
-        let mut transaction = self.pool().begin().await?;
-        drop_all_tables(&mut transaction).await?;
-        drop_all_types(&mut transaction).await?;
-        transaction.commit().await?;
-        Ok(())
-    }
 }
 
-#[instrument(skip_all)]
-pub async fn create_all_types(
-    transaction: &mut Transaction<'_, Postgres>,
-) -> Result<(), SqlxError> {
-    let statements = [
-        "CREATE TYPE user_role AS ENUM ('admin', 'regular');",
-        "CREATE TYPE chat_kind AS ENUM ('with_self', 'private', 'group', 'channel');",
-        "CREATE TYPE chat_role AS ENUM ('owner', 'moderator', 'member');",
-    ];
-    for statement in statements {
-        sqlx::query(statement).execute(transaction.as_mut()).await?;
-    }
-    Ok(())
-}
-
-#[instrument(skip_all)]
-pub async fn drop_all_types(transaction: &mut Transaction<'_, Postgres>) -> Result<(), SqlxError> {
-    let statements = [
-        "DROP TYPE IF EXISTS chat_role;",
-        "DROP TYPE IF EXISTS chat_kind;",
-        "DROP TYPE IF EXISTS user_role;",
-    ];
-    for statement in statements {
-        sqlx::query(statement).execute(transaction.as_mut()).await?;
-    }
-    Ok(())
-}
-
-#[instrument(skip_all)]
-pub async fn create_all_tables(
-    transaction: &mut Transaction<'_, Postgres>,
-) -> Result<(), SqlxError> {
-    let statements = [
-        "
-        CREATE TABLE users (
-            id               int PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-            alias            VARCHAR(30) NOT NULL UNIQUE,
-            display_name     VARCHAR(30) NOT NULL,
-            password_salt    BYTEA NOT NULL,
-            password_hash    BYTEA NOT NULL,
-            created_at       TIMESTAMPTZ NOT NULL,
-            role             user_role NOT NULL,
-            bio              VARCHAR(255),
-            invited_by       int REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL
-        );
-    ",
-        "
-        CREATE TABLE chats (
-            id              bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-            display_name    VARCHAR(50),
-            description     VARCHAR(255),
-            kind            chat_kind NOT NULL,
-            created_at      TIMESTAMPTZ NOT NULL
-        );
-    ",
-        "
-        CREATE TABLE sessions (
-            id              uuid PRIMARY KEY,
-            user_id         int NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE,
-            ip              inet NOT NULL,
-            first_seen_at   TIMESTAMPTZ NOT NULL,
-            last_seen_at    TIMESTAMPTZ NOT NULL,
-            device_name     VARCHAR(100),
-            os_version      VARCHAR(100),
-            app_version     VARCHAR(100),
-            refresh_token             BYTEA NOT NULL,
-            refresh_token_expires_at  TIMESTAMPTZ NOT NULL,
-            access_token              BYTEA NOT NULL,
-            access_token_expires_at   TIMESTAMPTZ NOT NULL,
-            refresh_counter           int NOT NULL
-        );
-    ",
-        "
-        CREATE TABLE chats_members (
-            chat_id   bigint NOT NULL REFERENCES chats(id) ON UPDATE CASCADE ON DELETE CASCADE,
-            user_id   int NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE,
-            role      chat_role NOT NULL,
-            CONSTRAINT chat_user_pkey PRIMARY KEY (user_id, chat_id)
-        );
-    ",
-        "
-        CREATE TABLE resources (
-            id                      bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-            uploaded_by_user_id     INTEGER NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL,
-            url                     VARCHAR(255) NOT NULL
-        );
-    ",
-        "
-        CREATE TABLE messages (
-            id           bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-            chat_id      bigint NOT NULL REFERENCES chats(id) ON UPDATE CASCADE ON DELETE CASCADE,
-            user_id      int REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL,
-            text         VARCHAR(4096),
-            reply_to     bigint REFERENCES messages(id) ON UPDATE CASCADE ON DELETE SET NULL,
-            resource_id  bigint REFERENCES resources(id) ON UPDATE CASCADE ON DELETE NO ACTION,
-            created_at   TIMESTAMPTZ NOT NULL,
-            edited_at    TIMESTAMPTZ
-        );
-    ",
-    ];
-    for statement in statements {
-        sqlx::query(statement).execute(transaction.as_mut()).await?;
-    }
-    Ok(())
-}
-
-#[instrument(skip_all)]
-pub async fn drop_all_tables(transaction: &mut Transaction<'_, Postgres>) -> Result<(), SqlxError> {
-    let statements = [
-        "DROP TABLE IF EXISTS messages;",
-        "DROP TABLE IF EXISTS resources;",
-        "DROP TABLE IF EXISTS chats_members;",
-        "DROP TABLE IF EXISTS sessions;",
-        "DROP TABLE IF EXISTS chats;",
-        "DROP TABLE IF EXISTS users;",
-    ];
-    for statement in &statements {
-        sqlx::query(statement).execute(transaction.as_mut()).await?;
-    }
-    Ok(())
-}
-
-#[instrument(skip_all)]
 pub async fn create_origin_user(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), SqlxError> {
-    let user = default_origin_user();
-    create_user(
+    let (user, generated_password) = default_origin_user();
+    let origin_user_id = create_user(
         transaction.as_mut(),
         &user.alias,
         &user.display_name,
@@ -175,6 +83,19 @@ pub async fn create_origin_user(
         user.role,
         user.invited_by,
     )
-    .await
-    .map(|_| ())
+    .await?;
+    sqlx::query(
+        "
+        INSERT INTO system_state (singleton, origin_user_id)
+        VALUES (TRUE, $1);
+        ",
+    )
+    .bind(origin_user_id)
+    .execute(transaction.as_mut())
+    .await?;
+    info!(
+        "created origin user; initial password (save and rotate): {}",
+        generated_password
+    );
+    Ok(())
 }

@@ -8,7 +8,9 @@ use base64::prelude::BASE64_STANDARD as BASE64;
 use base64::Engine;
 use tracing::info;
 
-use crate::auth::token::{AuthPayload, Claims, RefreshPayload, TokenExchangePayload};
+use crate::auth::token::{
+    AuthPayload, ChangePasswordPayload, Claims, RefreshPayload, TokenExchangePayload,
+};
 use crate::auth::utils::unpack_session_id_and_token;
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::ChatId;
@@ -26,6 +28,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/auth/whoami", get(whoami))
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
+        .route("/auth/change-password", post(change_password))
         .route("/auth/logout", post(logout))
         .route("/chats", get(list_chats))
         .route(
@@ -72,6 +75,22 @@ pub async fn logout(
     claims: Claims,
 ) -> Result<StatusCode, RequestError> {
     state.db_connection.logout(&claims.session_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn change_password(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Json(payload): Json<ChangePasswordPayload>,
+) -> Result<StatusCode, RequestError> {
+    state
+        .db_connection
+        .change_password(
+            claims.user_id,
+            &payload.current_password,
+            &payload.new_password,
+        )
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

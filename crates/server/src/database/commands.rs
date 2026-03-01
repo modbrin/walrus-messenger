@@ -12,8 +12,8 @@ use crate::auth::utils::{
 };
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
-    get_refresh_token, get_user_credentials_by_alias, get_user_id_by_alias, get_user_role,
-    is_user_in_chat, private_chat_exists,
+    get_refresh_token, get_user_credentials_by_alias, get_user_credentials_by_user_id,
+    get_user_id_by_alias, get_user_role, is_user_in_chat, private_chat_exists,
 };
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::{ChatId, ChatKind, ChatRole};
@@ -129,6 +129,29 @@ impl DbConnection {
     #[instrument(skip(self))]
     pub async fn create_channel_chat(&self) -> Result<(), RequestError> {
         todo!()
+    }
+
+    #[instrument(skip(self, current_password, new_password))]
+    pub async fn change_password(
+        &self,
+        caller: UserId,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<(), RequestError> {
+        validate_user_password(new_password)?;
+        let mut transaction = self.pool().begin().await?;
+        let Some(creds) = get_user_credentials_by_user_id(transaction.as_mut(), caller).await?
+        else {
+            return Err(ValidationError::NotFound.into());
+        };
+        if hash_password_sha256(current_password, creds.password_salt) != creds.password_hash {
+            return Err(RequestError::BadCredentials);
+        }
+        let new_salt = generate_salt();
+        let new_hash = hash_password_sha256(new_password, new_salt);
+        update_user_password(transaction.as_mut(), caller, &new_salt, &new_hash).await?;
+        transaction.commit().await?;
+        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -288,6 +311,28 @@ pub(super) async fn create_chat<'a, E: PgExecutor<'a>>(
     .try_get("id")?;
     info!("created new chat with id: {}", result);
     Ok(result)
+}
+
+#[instrument(skip(executor, password_salt, password_hash))]
+pub(super) async fn update_user_password<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    password_salt: &[u8],
+    password_hash: &[u8],
+) -> Result<(), SqlxError> {
+    sqlx::query(
+        "
+        UPDATE users
+        SET password_salt = $1, password_hash = $2
+        WHERE id = $3;
+    ",
+    )
+    .bind(password_salt)
+    .bind(password_hash)
+    .bind(user_id)
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 #[instrument(skip(executor))]
