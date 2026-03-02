@@ -3,7 +3,7 @@ name: Build and Publish Image
 on:
   push:
     branches:
-      - main
+      - master
   workflow_dispatch:
 
 concurrency:
@@ -30,7 +30,7 @@ jobs:
           image_name="ghcr.io/${owner_lc}/walrus"
 
           tags="${image_name}:${GITHUB_SHA}"
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+          if [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
             tags+=$'\n'"${image_name}:latest"
           fi
 
