@@ -223,8 +223,8 @@ cd /opt/walrus
 docker compose pull
 docker compose up -d
 docker compose ps
-curl -I http://127.0.0.1:3000/auth/whoami
-curl -I https://walrus.<your-domain>/auth/whoami
+curl -I http://127.0.0.1:3000/health
+curl -I https://walrus.<your-domain>/health
 ```
 
-HTTP `401` on `/auth/whoami` is expected without a token and confirms app is responding.
+HTTP `200` on `/health` confirms app is responding.

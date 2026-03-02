@@ -11,6 +11,17 @@ tags:
   - name: auth
   - name: messaging
 paths:
+  /health:
+    get:
+      tags: [auth]
+      summary: Public liveness check
+      operationId: health
+      description: Lightweight health check endpoint without authentication.
+      security: []
+      responses:
+        '200':
+          description: Service is up
+
   /auth/login:
     post:
       tags: [auth]

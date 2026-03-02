@@ -4,7 +4,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/walrus}"
 COMPOSE_FILE="${COMPOSE_FILE:-$APP_DIR/docker-compose.yml}"
 SERVICE_NAME="${SERVICE_NAME:-walrus-server}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/auth/whoami}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/health}"
 
 if [[ $# -gt 0 ]]; then
   export WALRUS_TAG="$1"
@@ -32,7 +32,7 @@ docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
 
 for _ in $(seq 1 30); do
   status_code="$(curl -s -o /dev/null -w '%{http_code}' "${HEALTH_URL}" || true)"
-  if [[ "${status_code}" == "200" || "${status_code}" == "401" ]]; then
+  if [[ "${status_code}" == "200" ]]; then
     echo "Deployment successful. Health endpoint returned ${status_code}."
     docker compose -f "${COMPOSE_FILE}" ps
     exit 0

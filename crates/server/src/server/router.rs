@@ -24,6 +24,7 @@ use crate::server::state::AppState;
 pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
     let addr = state.config.server.address.clone();
     let app = Router::new()
+        .route("/health", get(health))
         .route("/auth/whoami", get(whoami))
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
@@ -40,6 +41,10 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
     info!("starting server on: {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+pub async fn health() -> StatusCode {
+    StatusCode::OK
 }
 
 pub async fn login(
