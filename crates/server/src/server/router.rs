@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -19,6 +19,7 @@ use crate::models::message::{
     validate_message_text, ListMessagesResponse, SendMessageRequest, SendMessageResponse,
 };
 use crate::models::user::WhoAmIResponse;
+use crate::server::constants::MAX_REQUEST_BODY_BYTES;
 use crate::server::state::AppState;
 
 pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
@@ -35,6 +36,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
             "/chats/:chat_id/messages",
             get(list_messages).post(send_message),
         )
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

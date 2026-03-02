@@ -167,6 +167,7 @@ Paste:
 server {
     listen 80;
     server_name walrus.<your-domain>;
+    client_max_body_size 64k;
 
     # Public and internal paths are the same.
     location / {

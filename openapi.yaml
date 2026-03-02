@@ -4,6 +4,7 @@ info:
   version: 0.1.0
   description: |
     Implemented HTTP API only (current server state).
+    Request bodies larger than 64 KiB are rejected with HTTP 413.
 servers:
   - url: http://127.0.0.1:3000
     description: Local default (pass `--address 0.0.0.0:3000` on startup)
@@ -52,6 +53,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 error: bad auth or refresh credentials
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal error
           content:
@@ -128,6 +135,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal error
           content:
@@ -190,6 +203,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Token expired or current password mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
           content:
             application/json:
               schema:
@@ -323,6 +342,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal error
           content:
@@ -370,6 +395,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Chat not found or user has no access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
           content:
             application/json:
               schema:
