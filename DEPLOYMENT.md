@@ -140,20 +140,22 @@ chown -R walrus:walrus /opt/walrus
 
 Place these files into `/opt/walrus`:
 - `docker-compose.yml` (from this repository)
-- `.env` (runtime secrets and image config)
+- `.env` (runtime secrets and tag config)
 
 Example `.env`:
 ```env
-WALRUS_IMAGE=ghcr.io/<github-user-or-org>/walrus-server
 WALRUS_TAG=latest
 POSTGRES_DB=walrus_db
 POSTGRES_USER=walrus_app
 POSTGRES_PASSWORD=<strong-password>
 WALRUS_ORIGIN_PASSWORD=<strong-initial-origin-password>
+BACKUP_RETENTION_DAYS=7
+BACKUP_INTERVAL_SECONDS=86400
 ```
 `walrus-server` reads DB credentials from environment variables and is started by
 compose with `--address 0.0.0.0:3000`.
 `WALRUS_ORIGIN_PASSWORD` is required only for first bootstrap when origin user does not exist.
+`postgres-backup` uses `BACKUP_INTERVAL_SECONDS` and `BACKUP_RETENTION_DAYS` for automated dumps.
 
 ## 6. Nginx Reverse Proxy + TLS
 
@@ -229,3 +231,43 @@ curl -I https://walrus.<your-domain>/health
 ```
 
 HTTP `200` on `/health` confirms app is responding.
+
+## 9. Postgres Backup + Restore
+
+Backups are enabled by default via `postgres-backup` service in `docker-compose.yml`.
+It creates compressed `pg_dump` files in `/backups` every `BACKUP_INTERVAL_SECONDS`
+and deletes files older than `BACKUP_RETENTION_DAYS`.
+
+Check backup service health and recent backup files:
+```bash
+cd /opt/walrus
+docker compose ps postgres-backup
+docker compose logs --tail=50 postgres-backup
+docker compose exec -T postgres-backup sh -lc 'ls -lah /backups | tail -n 20'
+```
+
+Run an on-demand backup immediately:
+```bash
+docker compose exec -T postgres-backup sh -lc '
+ts="$(date -u +%Y%m%dT%H%M%SZ)";
+pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F c -f "/backups/${POSTGRES_DB}_${ts}_manual.dump"
+'
+```
+
+Restore drill (restore latest dump into a separate check DB):
+```bash
+cd /opt/walrus
+docker compose exec -T postgres sh -lc '
+psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS walrus_restore_check;";
+psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE walrus_restore_check;"
+'
+docker compose exec -T postgres-backup sh -lc '
+latest="$(ls -1 /backups/*.dump | sort | tail -n1)";
+pg_restore -h postgres -U "$POSTGRES_USER" -d walrus_restore_check "$latest"
+'
+docker compose exec -T postgres sh -lc '
+psql -U "$POSTGRES_USER" -d walrus_restore_check -c "\dt"
+'
+```
+
+For real incident restore, stop app writes first, restore into target DB, then bring app back.
