@@ -1,0 +1,99 @@
+name: MR Checks
+
+on:
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-check:
+    name: Cargo Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo check
+        run: cargo check --workspace --locked
+
+  cargo-test:
+    name: Cargo Test and Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - cargo-check
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: walrus_db
+          POSTGRES_USER: walrus_guest
+          POSTGRES_PASSWORD: walruspass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U walrus_guest -d walrus_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run tests with coverage
+        env:
+          WALRUS_DB_USERNAME: walrus_guest
+          WALRUS_DB_PASSWORD: walruspass
+          WALRUS_DB_NAME: walrus_db
+          WALRUS_DB_ADDRESS: 127.0.0.1
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --locked --lcov --output-path coverage/lcov.info
+          cargo llvm-cov report --summary-only | tee coverage/summary.txt
+          cargo llvm-cov report --html --output-dir coverage/html
+
+      - name: Publish coverage summary
+        run: |
+          {
+            echo "### Coverage Summary"
+            echo
+            echo '```text'
+            cat coverage/summary.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage/lcov.info
+            coverage/summary.txt
+            coverage/html

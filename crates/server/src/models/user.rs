@@ -86,7 +86,7 @@ pub fn validate_user_alias(alias: &str) -> Result<(), ValidationError> {
             value: alias.to_string(),
             reason: format!(
                 "user alias cannot be longer than {} chars",
-                USER_DISPLAY_NAME_LENGTH_LIMIT
+                USER_ALIAS_LENGTH_LIMIT
             ),
         });
     }
