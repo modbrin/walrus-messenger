@@ -2,9 +2,8 @@ name: Build and Publish Image
 
 on:
   push:
-    branches:
-      - master
-  workflow_dispatch:
+    tags:
+      - '*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,10 +28,8 @@ jobs:
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
           image_name="ghcr.io/${owner_lc}/walrus"
 
-          tags="${image_name}:${GITHUB_SHA}"
-          if [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
-            tags+=$'\n'"${image_name}:latest"
-          fi
+          tags="${image_name}:${GITHUB_REF_NAME}"
+          tags+=$'\n'"${image_name}:latest"
 
           {
             echo "tags<<EOF"
