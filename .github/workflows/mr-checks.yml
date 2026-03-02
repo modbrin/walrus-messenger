@@ -75,7 +75,7 @@ jobs:
           WALRUS_DB_ADDRESS: 127.0.0.1
         run: |
           mkdir -p coverage
-          cargo llvm-cov --workspace -p walrus-server --locked --lcov --output-path coverage/lcov.info
+          cargo llvm-cov --workspace --locked --lcov --output-path coverage/lcov.info
           cargo llvm-cov report --summary-only | tee coverage/summary.txt
           cargo llvm-cov report --html --output-dir coverage/html
 
