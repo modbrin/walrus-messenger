@@ -7,8 +7,9 @@ use tracing::{debug, info, instrument};
 
 use crate::auth::token::TokenExchangePayload;
 use crate::auth::utils::{
-    current_time, generate_session_token, hash_password, new_access_token_expiration,
-    new_refresh_token_expiration, verify_password,
+    current_time, generate_session_token, hash_password, hash_session_token,
+    new_access_token_expiration, new_refresh_token_expiration, verify_password,
+    verify_session_token,
 };
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
@@ -149,6 +150,7 @@ impl DbConnection {
     pub async fn change_password(
         &self,
         caller: UserId,
+        current_session: SessionId,
         current_password: &str,
         new_password: &str,
     ) -> Result<(), RequestError> {
@@ -163,6 +165,7 @@ impl DbConnection {
         }
         let new_hash = hash_password(new_password);
         update_user_password(transaction.as_mut(), caller, &new_hash).await?;
+        remove_sessions_for_user_except(transaction.as_mut(), caller, current_session).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -203,6 +206,8 @@ impl DbConnection {
         let refresh_token_expires_at = new_refresh_token_expiration();
         let access_token = generate_session_token();
         let access_token_expires_at = new_access_token_expiration();
+        let refresh_token_hash = hash_session_token(&refresh_token);
+        let access_token_hash = hash_session_token(&access_token);
         let session_id = create_session(
             transaction.as_mut(),
             creds.user_id,
@@ -210,16 +215,16 @@ impl DbConnection {
             Some("Google Pixel"),
             Some("Android 6.0"),
             Some("Walrus Messenger for Android 0.0.1"),
-            &refresh_token,
+            &refresh_token_hash,
             &refresh_token_expires_at,
-            &access_token,
+            &access_token_hash,
             &access_token_expires_at,
         )
         .await?;
         trim_sessions_for_user(transaction.as_mut(), creds.user_id, MAX_SESSIONS_PER_USER).await?;
         transaction.commit().await?;
         Ok(TokenExchangePayload::new(
-            &session_id,
+            session_id,
             refresh_token,
             refresh_token_expires_at,
             access_token,
@@ -228,20 +233,20 @@ impl DbConnection {
     }
 
     #[instrument(skip(self))]
-    pub async fn logout(&self, session_id: &SessionId) -> Result<(), RequestError> {
+    pub async fn logout(&self, session_id: SessionId) -> Result<(), RequestError> {
         Ok(remove_session(self.pool(), session_id).await?)
     }
 
     pub async fn refresh_session(
         &self,
-        session_id: &SessionId,
+        session_id: SessionId,
         refresh_token: &[u8],
     ) -> Result<TokenExchangePayload, RequestError> {
         let mut transaction = self.pool().begin().await?;
-        let Some(from_db) = get_refresh_token(self.pool(), session_id).await? else {
+        let Some(from_db) = get_refresh_token(transaction.as_mut(), session_id).await? else {
             return Err(RequestError::BadCredentials);
         };
-        if refresh_token != from_db.refresh_token {
+        if !verify_session_token(refresh_token, &from_db.refresh_token_hash) {
             return Err(RequestError::BadCredentials);
         }
         if from_db.refresh_token_expires_at <= current_time() {
@@ -251,12 +256,14 @@ impl DbConnection {
         let refresh_token_expires_at = new_refresh_token_expiration();
         let access_token = generate_session_token();
         let access_token_expires_at = new_access_token_expiration();
+        let refresh_token_hash = hash_session_token(&refresh_token);
+        let access_token_hash = hash_session_token(&access_token);
         let updated = update_session_tokens(
             transaction.as_mut(),
             session_id,
-            &refresh_token,
+            &refresh_token_hash,
             &refresh_token_expires_at,
-            &access_token,
+            &access_token_hash,
             &access_token_expires_at,
             from_db.refresh_counter,
         )
@@ -454,14 +461,14 @@ pub(super) async fn create_session<'a, E: PgExecutor<'a>>(
     device_name: Option<&str>,
     os_version: Option<&str>,
     app_version: Option<&str>,
-    refresh_token: &[u8],
+    refresh_token_hash: &[u8],
     refresh_token_expires_at: &DateTime<Utc>,
-    access_token: &[u8],
+    access_token_hash: &[u8],
     access_token_expires_at: &DateTime<Utc>,
 ) -> Result<SessionId, SqlxError> {
     let result = sqlx::query(
         "
-        INSERT INTO sessions (id, user_id, ip, first_seen_at, last_seen_at, device_name, os_version, app_version, refresh_token, refresh_token_expires_at, access_token, access_token_expires_at, refresh_counter)
+        INSERT INTO sessions (id, user_id, ip, first_seen_at, last_seen_at, device_name, os_version, app_version, refresh_token_hash, refresh_token_expires_at, access_token_hash, access_token_expires_at, refresh_counter)
         VALUES (gen_random_uuid(), $1, $2, current_timestamp, current_timestamp, $3, $4, $5, $6, $7, $8, $9, 1) RETURNING id;
     ",
     )
@@ -470,9 +477,9 @@ pub(super) async fn create_session<'a, E: PgExecutor<'a>>(
         .bind(device_name)
         .bind(os_version)
         .bind(app_version)
-        .bind(refresh_token)
+        .bind(refresh_token_hash)
         .bind(refresh_token_expires_at)
-        .bind(access_token)
+        .bind(access_token_hash)
         .bind(access_token_expires_at)
         .fetch_one(executor)
         .await?
@@ -484,22 +491,22 @@ pub(super) async fn create_session<'a, E: PgExecutor<'a>>(
 #[instrument(skip_all, fields(session_id))]
 pub(super) async fn update_session_tokens<'a, E: PgExecutor<'a>>(
     executor: E,
-    session_id: &SessionId,
-    refresh_token: &[u8],
+    session_id: SessionId,
+    refresh_token_hash: &[u8],
     refresh_token_expires_at: &DateTime<Utc>,
-    access_token: &[u8],
+    access_token_hash: &[u8],
     access_token_expires_at: &DateTime<Utc>,
     refresh_counter: i32,
 ) -> Result<bool, SqlxError> {
     let result = sqlx::query(
     "
-        UPDATE sessions SET refresh_token = $1, refresh_token_expires_at = $2, access_token = $3, access_token_expires_at = $4, refresh_counter = refresh_counter + 1
+        UPDATE sessions SET refresh_token_hash = $1, refresh_token_expires_at = $2, access_token_hash = $3, access_token_expires_at = $4, refresh_counter = refresh_counter + 1
         WHERE id = $5 AND refresh_counter = $6;
     "
     )
-    .bind(refresh_token)
+    .bind(refresh_token_hash)
     .bind(refresh_token_expires_at)
-    .bind(access_token)
+    .bind(access_token_hash)
     .bind(access_token_expires_at)
     .bind(session_id)
     .bind(refresh_counter)
@@ -512,7 +519,7 @@ pub(super) async fn update_session_tokens<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn remove_session<'a, E: PgExecutor<'a>>(
     executor: E,
-    session_id: &SessionId,
+    session_id: SessionId,
 ) -> Result<(), SqlxError> {
     sqlx::query(
         "
@@ -523,6 +530,24 @@ pub(super) async fn remove_session<'a, E: PgExecutor<'a>>(
     .execute(executor)
     .await?;
     debug!("removed session");
+    Ok(())
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn remove_sessions_for_user_except<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    current_session_id: SessionId,
+) -> Result<(), SqlxError> {
+    sqlx::query(
+        "
+        DELETE FROM sessions WHERE user_id = $1 AND id <> $2;
+    ",
+    )
+    .bind(user_id)
+    .bind(current_session_id)
+    .execute(executor)
+    .await?;
     Ok(())
 }
 

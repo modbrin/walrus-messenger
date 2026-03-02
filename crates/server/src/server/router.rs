@@ -66,7 +66,7 @@ pub async fn refresh(
     state.rate_limiter.check_refresh_session(session_id)?;
     let payload = state
         .db_connection
-        .refresh_session(&session_id, refresh_token)
+        .refresh_session(session_id, refresh_token)
         .await?;
     Ok(Json(payload))
 }
@@ -75,7 +75,7 @@ pub async fn logout(
     State(state): State<Arc<AppState>>,
     claims: Claims,
 ) -> Result<StatusCode, RequestError> {
-    state.db_connection.logout(&claims.session_id).await?;
+    state.db_connection.logout(claims.session_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -91,6 +91,7 @@ pub async fn change_password(
         .db_connection
         .change_password(
             claims.user_id,
+            claims.session_id,
             &payload.current_password,
             &payload.new_password,
         )

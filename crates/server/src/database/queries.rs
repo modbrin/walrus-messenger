@@ -52,7 +52,7 @@ impl DbConnection {
 
     pub async fn resolve_session(
         &self,
-        session_id: &SessionId,
+        session_id: SessionId,
         access_token: &[u8],
     ) -> Result<UserId, SessionError> {
         let Some(token) = get_access_token(self.pool(), session_id)
@@ -64,7 +64,7 @@ impl DbConnection {
         else {
             return Err(SessionError::TokenNotFound);
         };
-        if access_token != token.access_token {
+        if !crate::auth::utils::verify_session_token(access_token, &token.access_token_hash) {
             return Err(SessionError::TokenNotFound);
         }
         if token.access_token_expires_at <= current_time() {
@@ -280,11 +280,11 @@ pub(super) async fn list_messages_for_user_after<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn get_access_token<'a, E: PgExecutor<'a>>(
     executor: E,
-    session_id: &SessionId,
+    session_id: SessionId,
 ) -> Result<Option<ResolveSessionResponse>, SqlxError> {
     let result = sqlx::query_as(
         "
-    SELECT user_id, access_token, access_token_expires_at FROM sessions WHERE id = $1;
+    SELECT user_id, access_token_hash, access_token_expires_at FROM sessions WHERE id = $1;
     ",
     )
     .bind(session_id)
@@ -296,11 +296,11 @@ pub(super) async fn get_access_token<'a, E: PgExecutor<'a>>(
 #[instrument(skip(executor))]
 pub(super) async fn get_refresh_token<'a, E: PgExecutor<'a>>(
     executor: E,
-    session_id: &SessionId,
+    session_id: SessionId,
 ) -> Result<Option<RefreshTokenResponse>, SqlxError> {
     let result = sqlx::query_as(
         "
-    SELECT refresh_token, refresh_token_expires_at, refresh_counter FROM sessions WHERE id = $1;
+    SELECT refresh_token_hash, refresh_token_expires_at, refresh_counter FROM sessions WHERE id = $1;
     ",
     )
     .bind(session_id)

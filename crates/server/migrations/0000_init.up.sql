@@ -54,9 +54,9 @@ CREATE TABLE sessions (
     device_name               VARCHAR(100),
     os_version                VARCHAR(100),
     app_version               VARCHAR(100),
-    refresh_token             BYTEA NOT NULL,
+    refresh_token_hash        BYTEA NOT NULL,
     refresh_token_expires_at  TIMESTAMPTZ NOT NULL,
-    access_token              BYTEA NOT NULL,
+    access_token_hash         BYTEA NOT NULL,
     access_token_expires_at   TIMESTAMPTZ NOT NULL,
     refresh_counter           int NOT NULL
 );

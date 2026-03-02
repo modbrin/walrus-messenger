@@ -50,7 +50,7 @@ where
         })?;
         let user_id = state
             .db_connection
-            .resolve_session(&sid, access_token)
+            .resolve_session(sid, access_token)
             .await?;
         Ok(Claims {
             user_id,
@@ -69,7 +69,7 @@ pub struct TokenExchangePayload {
 
 impl TokenExchangePayload {
     pub fn new<B1: AsRef<[u8]>, B2: AsRef<[u8]>>(
-        session_id: &SessionId,
+        session_id: SessionId,
         refresh_token: B1,
         refresh_token_expires_at: DateTime<Utc>,
         access_token: B2,

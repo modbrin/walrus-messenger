@@ -9,6 +9,7 @@ use crate::database::commands::MAX_SESSIONS_PER_USER;
 use crate::database::connection::{DbConfig, DbConnection};
 use crate::error::{RequestError, SessionError};
 use crate::models::chat::ChatKind;
+use crate::models::session::SessionId;
 use crate::models::user::{InviteUserRequest, UserId, UserRole};
 
 /// Some tests can't run in parallel, prevent them from breaking each other's state
@@ -45,7 +46,13 @@ async fn resolve_session(
 ) -> Result<UserId, SessionError> {
     let packed_bytes = BASE64.decode(&tokens.access_token).unwrap();
     let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
-    db.resolve_session(&session_id, token).await
+    db.resolve_session(session_id, token).await
+}
+
+fn unpack_encoded_session_token(token_b64: &str) -> (SessionId, Vec<u8>) {
+    let packed_bytes = BASE64.decode(token_b64).unwrap();
+    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
+    (session_id, token.to_vec())
 }
 
 #[tokio::test]
@@ -259,18 +266,32 @@ async fn change_password() {
     let user_id = invite_regular(&db, alias, pass, name).await;
     let new_password = "updated_password_a";
 
+    let current_session = db.login(alias, pass).await.unwrap();
+    let (current_session_id, _token) = unpack_encoded_session_token(&current_session.access_token);
+    let other_session = db.login(alias, pass).await.unwrap();
+
     let result = db
-        .change_password(user_id, "wrong_current_password", new_password)
+        .change_password(
+            user_id,
+            current_session_id,
+            "wrong_current_password",
+            new_password,
+        )
         .await
         .unwrap_err();
     assert!(matches!(result, RequestError::BadCredentials));
 
-    db.change_password(user_id, pass, new_password)
+    db.change_password(user_id, current_session_id, pass, new_password)
         .await
         .unwrap();
 
     let old_login_result = db.login(alias, pass).await.unwrap_err();
     assert!(matches!(old_login_result, RequestError::BadCredentials));
+
+    let still_valid = resolve_session(&db, &current_session).await.unwrap();
+    assert_eq!(still_valid, user_id);
+    let revoked = resolve_session(&db, &other_session).await.unwrap_err();
+    assert!(matches!(revoked, SessionError::TokenNotFound));
 
     let new_login_result = db.login(alias, new_password).await.unwrap();
     let resolved_user = resolve_session(&db, &new_login_result).await.unwrap();
@@ -313,9 +334,8 @@ async fn logout() {
     let session = db.login(alias, pass).await.unwrap();
     let _ok = resolve_session(&db, &session).await.unwrap();
 
-    let packed_bytes = BASE64.decode(&session.access_token).unwrap();
-    let (session_id, _token) = unpack_session_id_and_token(&packed_bytes).unwrap();
-    db.logout(&session_id).await.unwrap();
+    let (session_id, _token) = unpack_encoded_session_token(&session.access_token);
+    db.logout(session_id).await.unwrap();
 
     let err = resolve_session(&db, &session).await.unwrap_err();
     assert!(matches!(err, SessionError::TokenNotFound));
@@ -332,9 +352,8 @@ async fn refresh_token() {
     let first_session = db.login(alias, pass).await.unwrap();
     let _ok = resolve_session(&db, &first_session).await.unwrap();
 
-    let packed_bytes = BASE64.decode(&first_session.refresh_token).unwrap();
-    let (session_id, token) = unpack_session_id_and_token(&packed_bytes).unwrap();
-    let second_session = db.refresh_session(&session_id, token).await.unwrap();
+    let (session_id, token) = unpack_encoded_session_token(&first_session.refresh_token);
+    let second_session = db.refresh_session(session_id, &token).await.unwrap();
     assert_ne!(second_session.refresh_token, first_session.refresh_token);
     assert_ne!(second_session.access_token, first_session.access_token);
 
