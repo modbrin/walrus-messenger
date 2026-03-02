@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::auth::token::TokenExchangePayload;
 use crate::auth::utils::unpack_session_id_and_token;
+use crate::config::ENV_ORIGIN_PASSWORD;
 use crate::database::commands::MAX_SESSIONS_PER_USER;
 use crate::database::connection::{DbConfig, DbConnection};
 use crate::error::{RequestError, SessionError};
@@ -14,6 +15,7 @@ use crate::models::user::{InviteUserRequest, UserId, UserRole};
 
 /// Some tests can't run in parallel, prevent them from breaking each other's state
 static SERIAL_LOCK: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
+const TEST_ORIGIN_PASSWORD: &str = "test_origin_password";
 
 async fn init_and_get_db() -> DbConnection {
     let _ = tracing_subscriber::fmt::try_init();
@@ -21,6 +23,7 @@ async fn init_and_get_db() -> DbConnection {
     let config = DbConfig::development("walrus_db", "walrus_guest", "walruspass");
     let db = DbConnection::connect(&config).await.unwrap();
     db.drop_schema().await.unwrap();
+    std::env::set_var(ENV_ORIGIN_PASSWORD, TEST_ORIGIN_PASSWORD);
     db.init_schema().await.unwrap();
     db
 }

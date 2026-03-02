@@ -7,6 +7,7 @@ const ENV_DB_PASSWORD: &str = "WALRUS_DB_PASSWORD";
 const ENV_DB_NAME: &str = "WALRUS_DB_NAME";
 const ENV_DB_ADDRESS: &str = "WALRUS_DB_ADDRESS";
 const ENV_DB_MAX_CONNECTIONS: &str = "WALRUS_DB_MAX_CONNECTIONS";
+pub const ENV_ORIGIN_PASSWORD: &str = "WALRUS_ORIGIN_PASSWORD";
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -46,11 +47,11 @@ impl AppConfig {
     }
 }
 
-fn required_env(name: &str) -> Result<String, anyhow::Error> {
+pub fn required_env(name: &str) -> Result<String, anyhow::Error> {
     std::env::var(name).with_context(|| format!("missing required env var `{name}`"))
 }
 
-fn optional_env(name: &str) -> Option<String> {
+pub fn optional_env(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .map(|value| value.trim().to_string())

@@ -8,7 +8,8 @@ This guide sets up a single-VPS production deployment with:
 
 ## 0. Important Before Production
 
-Current backend startup resets and reseeds DB by default in [crates/server/src/server/mod.rs](/home/modbrin/projects/walrus/crates/server/src/server/mod.rs). Remove that before real production, or every restart will wipe data.
+Current backend startup applies migrations and ensures origin admin exists.  
+On first bootstrap only, set `WALRUS_ORIGIN_PASSWORD`; startup fails if origin user is missing and this env var is not provided.
 
 ## 1. Create User and SSH Key Access
 
@@ -148,9 +149,11 @@ WALRUS_TAG=latest
 POSTGRES_DB=walrus_db
 POSTGRES_USER=walrus_app
 POSTGRES_PASSWORD=<strong-password>
+WALRUS_ORIGIN_PASSWORD=<strong-initial-origin-password>
 ```
 `walrus-server` reads DB credentials from environment variables and is started by
 compose with `--address 0.0.0.0:3000`.
+`WALRUS_ORIGIN_PASSWORD` is required only for first bootstrap when origin user does not exist.
 
 ## 6. Nginx Reverse Proxy + TLS
 

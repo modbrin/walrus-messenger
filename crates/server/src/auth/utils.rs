@@ -2,7 +2,6 @@ use argon2::password_hash::rand_core::OsRng as PasswordOsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use chrono::{DateTime, Utc};
-use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -80,8 +79,4 @@ pub fn unpack_session_id_and_token(packed: &[u8]) -> Option<(SessionId, &[u8])> 
     let session_id = SessionId::from_slice(packed.get(..sid_len)?).ok()?;
     let token = packed.get(sid_len..)?;
     Some((session_id, token))
-}
-
-pub fn generate_default_password() -> String {
-    Alphanumeric.sample_string(&mut OsRng, 20)
 }

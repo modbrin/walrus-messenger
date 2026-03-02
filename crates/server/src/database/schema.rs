@@ -4,26 +4,27 @@ use sqlx::migrate::Migrator;
 use sqlx::{Error as SqlxError, Postgres, Transaction};
 use tracing::info;
 
-use crate::auth::utils::{generate_default_password, hash_password};
+use crate::auth::utils::hash_password;
+use crate::config::{optional_env, ENV_ORIGIN_PASSWORD};
 use crate::database::commands::{create_user, create_with_self_chat};
 use crate::database::connection::DbConnection;
 use crate::models::user::{CreateUserRequest, UserId, UserRole};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-fn default_origin_user() -> (CreateUserRequest, String) {
-    let generated_password = generate_default_password();
-    let hash = hash_password(&generated_password);
-    (
-        CreateUserRequest {
-            alias: "origin".to_string(),
-            display_name: "Origin User".to_string(),
-            role: UserRole::Admin,
-            password_hash: hash,
-            invited_by: None,
-        },
-        generated_password,
-    )
+fn origin_user_from_env() -> Result<CreateUserRequest, SqlxError> {
+    let Some(password) = optional_env(ENV_ORIGIN_PASSWORD) else {
+        return Err(SqlxError::Protocol(format!(
+            "missing required env var `{ENV_ORIGIN_PASSWORD}` for initial origin-user bootstrap"
+        )));
+    };
+    Ok(CreateUserRequest {
+        alias: "origin".to_string(),
+        display_name: "Origin User".to_string(),
+        role: UserRole::Admin,
+        password_hash: hash_password(&password),
+        invited_by: None,
+    })
 }
 
 impl DbConnection {
@@ -70,7 +71,7 @@ impl DbConnection {
 pub async fn create_origin_user(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), SqlxError> {
-    let (user, generated_password) = default_origin_user();
+    let user = origin_user_from_env()?;
     let origin_user_id = create_user(
         transaction.as_mut(),
         &user.alias,
@@ -90,9 +91,6 @@ pub async fn create_origin_user(
     .bind(origin_user_id)
     .execute(transaction.as_mut())
     .await?;
-    info!(
-        "created origin user; initial password (save and rotate): {}",
-        generated_password
-    );
+    info!("created origin user from {ENV_ORIGIN_PASSWORD} bootstrap secret");
     Ok(())
 }

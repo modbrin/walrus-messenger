@@ -32,6 +32,7 @@ services:
       WALRUS_DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       WALRUS_DB_NAME: ${POSTGRES_DB:-walrus_db}
       WALRUS_DB_ADDRESS: postgres
+      WALRUS_ORIGIN_PASSWORD: ${WALRUS_ORIGIN_PASSWORD:-}
     networks:
       - walrus
 
