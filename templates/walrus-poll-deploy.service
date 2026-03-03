@@ -1,0 +1,12 @@
+# Target path on server: /etc/systemd/system/walrus-poll-deploy.service
+[Unit]
+Description=Walrus poll-based deployment check
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=walrus
+WorkingDirectory=/opt/walrus
+EnvironmentFile=-/opt/walrus/.env
+ExecStart=/opt/walrus/poll-deploy.sh

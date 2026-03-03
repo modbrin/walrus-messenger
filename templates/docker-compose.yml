@@ -1,3 +1,4 @@
+# Target path on server: /opt/walrus/docker-compose.yml
 services:
   postgres:
     image: postgres:18
@@ -8,7 +9,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-walrus_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-walrus_app} -d ${POSTGRES_DB:-walrus_db}"]
       interval: 10s
@@ -30,14 +31,16 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-walrus_app}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
-    entrypoint: ["/bin/sh", "-ec"]
-    command: >
-      while true; do
-        ts="$$(date -u +%Y%m%dT%H%M%SZ)";
-        pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -F c -f "/backups/$${POSTGRES_DB}_$${ts}.dump";
-        find /backups -type f -name '*.dump' -mtime "+$$BACKUP_RETENTION_DAYS" -delete;
-        sleep "$$BACKUP_INTERVAL_SECONDS";
-      done
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        while true; do
+          ts="$$(date -u +%Y%m%dT%H%M%SZ)";
+          pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -F c -f "/backups/$${POSTGRES_DB}_$${ts}.dump";
+          find /backups -type f -name '*.dump' -mtime "+$$BACKUP_RETENTION_DAYS" -delete;
+          sleep "$$BACKUP_INTERVAL_SECONDS";
+        done
     volumes:
       - postgres_backups:/backups
     networks:
