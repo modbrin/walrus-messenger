@@ -4,7 +4,7 @@ This guide sets up a single-VPS production deployment with:
 - Docker Compose (`walrus-server` + `postgres`)
 - Nginx on host (TLS termination)
 - Security baseline (`ufw`, `fail2ban`, `unattended-upgrades`)
-- GitHub Actions CD over SSH using `deploy.sh`
+- GitHub Actions image publish and VPS pull-based deployment polling
 
 ## 0. Important Before Production
 
@@ -138,9 +138,34 @@ mkdir -p /opt/walrus
 chown -R walrus:walrus /opt/walrus
 ```
 
-Place these files into `/opt/walrus`:
-- `docker-compose.yml` (from this repository)
-- `.env` (runtime secrets and tag config)
+Server-side templates are stored in this repository under `templates/`.
+
+Render runtime files from templates:
+```bash
+sudo install -o walrus -g walrus -m 644 /opt/walrus/templates/docker-compose.yml /opt/walrus/docker-compose.yml
+sudo install -o walrus -g walrus -m 750 /opt/walrus/templates/poll-deploy.sh /opt/walrus/poll-deploy.sh
+sudo install -o walrus -g walrus -m 600 /opt/walrus/templates/.env.template /opt/walrus/.env
+```
+
+Recommended permissions in `/opt/walrus`:
+- owner/group for app files: `walrus:walrus`
+- directories: `750`
+- `.env`: `600`
+- `docker-compose.yml`: `644`
+- `poll-deploy.sh`: `750` (executable)
+
+Apply permissions:
+```bash
+sudo chown -R walrus:walrus /opt/walrus
+sudo find /opt/walrus -type d -exec chmod 750 {} \;
+sudo chmod 600 /opt/walrus/.env
+sudo chmod 644 /opt/walrus/docker-compose.yml
+sudo chmod 750 /opt/walrus/poll-deploy.sh
+```
+
+Notes:
+- Creating files with `sudo` is fine, but reset ownership to `walrus:walrus` afterward.
+- Systemd unit files in `/etc/systemd/system` should stay `root:root`.
 
 Example `.env`:
 ```env
@@ -159,7 +184,7 @@ compose with `--address 0.0.0.0:3000`.
 
 ## 6. Nginx Reverse Proxy + TLS
 
-Edit Nginx site config:
+Create bootstrap HTTP config (used for first cert issuance):
 ```bash
 sudo nano /etc/nginx/sites-available/walrus.conf
 ```
@@ -171,7 +196,6 @@ server {
     server_name walrus.<your-domain>;
     client_max_body_size 64k;
 
-    # Public and internal paths are the same.
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -185,11 +209,50 @@ server {
 }
 ```
 
-Enable + issue cert:
+Enable site and issue certificate:
 ```bash
 ln -s /etc/nginx/sites-available/walrus.conf /etc/nginx/sites-enabled/walrus.conf
 nginx -t && systemctl reload nginx
 certbot --nginx -d walrus.<your-domain> --redirect -m <email> --agree-tos --no-eff-email
+```
+
+Then ensure final HTTPS config is:
+```bash
+sudo nano /etc/nginx/sites-available/walrus.conf
+```
+
+Paste:
+```nginx
+server {
+    listen 80;
+    server_name walrus.<your-domain>;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name walrus.<your-domain>;
+    client_max_body_size 64k;
+
+    ssl_certificate /etc/letsencrypt/live/walrus.<your-domain>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/walrus.<your-domain>/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+Validate and reload:
+```bash
+nginx -t && systemctl reload nginx
 ```
 
 Client integration note:
@@ -202,22 +265,32 @@ Adding hostnames to certificate later:
 certbot --nginx -d walrus.<your-domain> -d api.<your-domain> --expand
 ```
 
-## 7. Deploy from GitHub Actions
+## 7. Poll-Based Deploy on VPS (systemd timer)
 
-Use SSH-based deployment to run `deploy.sh` on VPS.
+Install timer units:
+```bash
+sudo install -o root -g root -m 644 /opt/walrus/templates/systemd/walrus-poll-deploy.service /etc/systemd/system/walrus-poll-deploy.service
+sudo install -o root -g root -m 644 /opt/walrus/templates/systemd/walrus-poll-deploy.timer /etc/systemd/system/walrus-poll-deploy.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now walrus-poll-deploy.timer
+```
 
-Required GitHub secrets:
-- `PROD_SSH_HOST`
-- `PROD_SSH_USER`
-- `PROD_SSH_KEY`
-- `GHCR_USER` (if image is private)
-- `GHCR_TOKEN` (if image is private)
+Verify timer registration:
+```bash
+sudo systemctl status walrus-poll-deploy.timer --no-pager
+systemctl list-timers --all | grep walrus-poll-deploy
+```
 
-Deploy command over SSH:
+Trigger first deploy manually and verify timer state:
 ```bash
 cd /opt/walrus
-GHCR_USER="$GHCR_USER" GHCR_TOKEN="$GHCR_TOKEN" ./deploy.sh "$GITHUB_REF_NAME"
+sudo systemctl start walrus-poll-deploy.service
+journalctl -u walrus-poll-deploy.service -n 100 --no-pager
 ```
+
+Only the timer should be enabled for periodic runs; the service is `oneshot` and should not be enabled directly.
+
+By default `poll-deploy.sh` deploys `WALRUS_TAG=latest`; to pin a specific tag, set `WALRUS_TAG=<tag>` in `/opt/walrus/.env`.
 
 ## 8. First Start / Verification
 

@@ -1,0 +1,12 @@
+# Target path on server: /etc/systemd/system/walrus-poll-deploy.timer
+[Unit]
+Description=Run Walrus poll-based deployment every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=45s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

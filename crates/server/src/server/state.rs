@@ -11,10 +11,11 @@ pub struct AppState {
 impl AppState {
     pub async fn try_init(config: &AppConfig) -> anyhow::Result<Self> {
         let db_connection = DbConnection::connect(&config.database).await?;
+        let rate_limiter = RateLimiter::new();
         Ok(Self {
             config: config.clone(),
             db_connection,
-            rate_limiter: RateLimiter::new(),
+            rate_limiter,
         })
     }
 }
