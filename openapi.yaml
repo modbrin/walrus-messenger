@@ -191,7 +191,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChangePasswordPayload'
+              $ref: '#/components/schemas/ChangePasswordRequest'
       responses:
         '204':
           description: Password changed
@@ -203,6 +203,54 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Token expired or current password mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/invite:
+    post:
+      tags: [auth]
+      summary: Invite user and bootstrap direct chats
+      operationId: inviteUser
+      description: >
+        Admin-only endpoint. Creates a regular user from alias/password and immediately creates
+        private chats between that user and every existing user.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteUserResponse'
+        '400':
+          description: Invalid payload, insufficient permissions, or user alias already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
           content:
             application/json:
               schema:
@@ -445,7 +493,7 @@ components:
           minLength: 1
           description: Opaque refresh token returned by /auth/login or /auth/refresh.
 
-    ChangePasswordPayload:
+    ChangePasswordRequest:
       type: object
       additionalProperties: false
       required: [current_password, new_password]
@@ -457,6 +505,29 @@ components:
           type: string
           minLength: 8
           maxLength: 80
+
+    InviteUserRequest:
+      type: object
+      additionalProperties: false
+      required: [alias, password]
+      properties:
+        alias:
+          type: string
+          minLength: 1
+          maxLength: 30
+        password:
+          type: string
+          minLength: 8
+          maxLength: 80
+
+    InviteUserResponse:
+      type: object
+      additionalProperties: false
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          format: int32
 
     WhoAmIResponse:
       type: object

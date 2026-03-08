@@ -8,9 +8,7 @@ use base64::prelude::BASE64_STANDARD as BASE64;
 use base64::Engine;
 use tracing::info;
 
-use crate::auth::token::{
-    AuthPayload, ChangePasswordPayload, Claims, RefreshPayload, TokenExchangePayload,
-};
+use crate::auth::token::{AuthPayload, Claims, RefreshPayload, TokenExchangePayload};
 use crate::auth::utils::unpack_session_id_and_token;
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::{ChatId, ListChatsResponse};
@@ -18,7 +16,9 @@ use crate::models::listing::{ListingMode, ListingQuery};
 use crate::models::message::{
     validate_message_text, ListMessagesResponse, SendMessageRequest, SendMessageResponse,
 };
-use crate::models::user::WhoAmIResponse;
+use crate::models::user::{
+    ChangePasswordRequest, InviteUserRequest, InviteUserResponse, WhoAmIResponse,
+};
 use crate::server::constants::MAX_REQUEST_BODY_BYTES;
 use crate::server::state::AppState;
 
@@ -31,6 +31,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/auth/refresh", post(refresh))
         .route("/auth/change-password", post(change_password))
         .route("/auth/logout", post(logout))
+        .route("/users/invite", post(invite_user))
         .route("/chats", get(list_chats))
         .route(
             "/chats/:chat_id/messages",
@@ -89,7 +90,7 @@ pub async fn logout(
 pub async fn change_password(
     State(state): State<Arc<AppState>>,
     claims: Claims,
-    Json(payload): Json<ChangePasswordPayload>,
+    Json(payload): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, RequestError> {
     state
         .rate_limiter
@@ -110,6 +111,18 @@ pub async fn whoami(claims: Claims) -> Json<WhoAmIResponse> {
     Json(WhoAmIResponse {
         user_id: claims.user_id,
     })
+}
+
+pub async fn invite_user(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Json(payload): Json<InviteUserRequest>,
+) -> Result<(StatusCode, Json<InviteUserResponse>), RequestError> {
+    let user_id = state
+        .db_connection
+        .invite_user(claims.user_id, &payload.alias, &payload.password)
+        .await?;
+    Ok((StatusCode::CREATED, Json(InviteUserResponse { user_id })))
 }
 
 pub async fn list_chats(

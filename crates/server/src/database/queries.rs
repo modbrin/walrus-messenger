@@ -107,6 +107,19 @@ pub(super) async fn get_user_id_by_alias<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
+pub(super) async fn list_user_ids<'a, E: PgExecutor<'a>>(
+    executor: E,
+) -> Result<Vec<UserId>, SqlxError> {
+    sqlx::query_scalar(
+        "
+    SELECT id FROM users ORDER BY id;
+    ",
+    )
+    .fetch_all(executor)
+    .await
+}
+
+#[instrument(skip(executor))]
 pub(super) async fn get_user_credentials_by_alias<'a, E: PgExecutor<'a>>(
     executor: E,
     alias: &str,

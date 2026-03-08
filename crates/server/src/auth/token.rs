@@ -97,9 +97,3 @@ pub struct AuthPayload {
 pub struct RefreshPayload {
     pub refresh_token: String,
 }
-
-#[derive(Debug, Deserialize)]
-pub struct ChangePasswordPayload {
-    pub current_password: String,
-    pub new_password: String,
-}

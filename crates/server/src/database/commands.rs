@@ -14,28 +14,26 @@ use crate::auth::utils::{
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
     get_refresh_token, get_user_credentials_by_alias, get_user_credentials_by_user_id,
-    get_user_id_by_alias, get_user_role, is_user_in_chat,
+    get_user_id_by_alias, get_user_role, is_user_in_chat, list_user_ids,
 };
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::{ChatId, ChatKind, ChatRole};
 use crate::models::message::MessageId;
 use crate::models::resource::ResourceId;
 use crate::models::session::SessionId;
-use crate::models::user::{
-    validate_user_alias, validate_user_display_name, validate_user_password, InviteUserRequest,
-    UserId, UserRole,
-};
+use crate::models::user::{validate_user_alias, validate_user_password, UserId, UserRole};
 
 /// Number of sessions single account can have, older sessions will be silently removed when new are added,
 /// old sessions are determined by `access_token_expires_at`
 pub const MAX_SESSIONS_PER_USER: i32 = 100;
 
 impl DbConnection {
-    #[instrument(skip(self, request))]
+    #[instrument(skip(self, initial_password))]
     pub async fn invite_user(
         &self,
         caller: UserId,
-        request: InviteUserRequest,
+        alias: &str,
+        initial_password: &str,
     ) -> Result<UserId, RequestError> {
         let mut transaction = self.pool().begin().await?;
         let current_role = get_user_role(transaction.as_mut(), caller).await?.role;
@@ -47,20 +45,35 @@ impl DbConnection {
             }
             .into());
         }
-        validate_user_alias(&request.alias)?;
-        validate_user_display_name(&request.display_name)?;
-        validate_user_password(&request.initial_password)?;
-        let password_hash = hash_password(&request.initial_password);
-        let user_id = create_user(
+
+        validate_user_alias(alias)?;
+        validate_user_password(initial_password)?;
+        let existing_user_ids = list_user_ids(transaction.as_mut()).await?;
+        let password_hash = hash_password(initial_password);
+        let user_id = match create_user(
             transaction.as_mut(),
-            &request.alias,
-            &request.display_name,
+            alias,
+            alias,
             &password_hash,
-            request.role,
+            UserRole::Regular,
             Some(caller),
         )
-        .await?;
+        .await
+        {
+            Ok(user_id) => user_id,
+            Err(error) => {
+                if let SqlxError::Database(db_error) = &error {
+                    if db_error.is_unique_violation() {
+                        return Err(ValidationError::AlreadyExists.into());
+                    }
+                }
+                return Err(error.into());
+            }
+        };
         let _ = create_with_self_chat(&mut transaction, user_id).await?;
+        for peer_user_id in existing_user_ids {
+            let _ = create_private_chat(&mut transaction, user_id, peer_user_id).await?;
+        }
         transaction.commit().await?;
         Ok(user_id)
     }

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 
 use crate::error::ValidationError;
@@ -11,6 +11,23 @@ const USER_PASSWORD_MAX_LENGTH: usize = 80;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WhoAmIResponse {
+    pub user_id: UserId,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct InviteUserRequest {
+    pub alias: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InviteUserResponse {
     pub user_id: UserId,
 }
 
@@ -29,14 +46,6 @@ pub struct CreateUserRequest {
     pub role: UserRole,
     pub password_hash: String,
     pub invited_by: Option<UserId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct InviteUserRequest {
-    pub alias: String,
-    pub display_name: String,
-    pub role: UserRole,
-    pub initial_password: String,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]

@@ -8,10 +8,10 @@ use crate::auth::utils::unpack_session_id_and_token;
 use crate::config::ENV_ORIGIN_PASSWORD;
 use crate::database::commands::MAX_SESSIONS_PER_USER;
 use crate::database::connection::{DbConfig, DbConnection};
-use crate::error::{RequestError, SessionError};
-use crate::models::chat::ChatKind;
+use crate::error::{RequestError, SessionError, ValidationError};
+use crate::models::chat::{ChatId, ChatKind, ChatResponse};
 use crate::models::session::SessionId;
-use crate::models::user::{InviteUserRequest, UserId, UserRole};
+use crate::models::user::UserId;
 
 /// Some tests can't run in parallel, prevent them from breaking each other's state
 static SERIAL_LOCK: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
@@ -28,19 +28,9 @@ async fn init_and_get_db() -> DbConnection {
     db
 }
 
-async fn invite_regular(db: &DbConnection, alias: &str, pass: &str, name: &str) -> UserId {
+async fn invite_regular(db: &DbConnection, alias: &str, pass: &str) -> UserId {
     let origin_user_id = 1;
-    db.invite_user(
-        origin_user_id,
-        InviteUserRequest {
-            initial_password: pass.to_string(),
-            alias: alias.to_string(),
-            display_name: name.to_string(),
-            role: UserRole::Regular,
-        },
-    )
-    .await
-    .unwrap()
+    db.invite_user(origin_user_id, alias, pass).await.unwrap()
 }
 
 async fn resolve_session(
@@ -58,6 +48,49 @@ fn unpack_encoded_session_token(token_b64: &str) -> (SessionId, Vec<u8>) {
     (session_id, token.to_vec())
 }
 
+async fn list_user_chats(db: &DbConnection, user_id: UserId) -> Vec<ChatResponse> {
+    db.list_chats(user_id, 100, 1).await.unwrap().chats
+}
+
+async fn find_matching_chats(
+    db: &DbConnection,
+    user_id: UserId,
+    kind: ChatKind,
+    display_name: Option<&str>,
+) -> Vec<ChatResponse> {
+    list_user_chats(db, user_id)
+        .await
+        .into_iter()
+        .filter(|chat| chat.kind == kind && chat.display_name.as_deref() == display_name)
+        .collect()
+}
+
+async fn find_chat_id(
+    db: &DbConnection,
+    user_id: UserId,
+    kind: ChatKind,
+    display_name: Option<&str>,
+) -> ChatId {
+    find_matching_chats(db, user_id, kind, display_name)
+        .await
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| {
+            panic!(
+                "expected chat not found for user_id={user_id}, kind={kind:?}, display_name={display_name:?}"
+            )
+        })
+        .id
+}
+
+async fn count_chats_by_kind(db: &DbConnection, user_id: UserId, kind: ChatKind) -> usize {
+    list_user_chats(db, user_id)
+        .await
+        .iter()
+        .filter(|chat| chat.kind == kind)
+        .count()
+}
+
 #[tokio::test]
 async fn create_chat_with_self() {
     let _lock = SERIAL_LOCK.lock().await;
@@ -66,15 +99,15 @@ async fn create_chat_with_self() {
     let msg_a_1 = "Hi chat with self, here I will be sending messages for myself!";
     let msg_a_2 = "It seems lonely here :((";
 
-    let user_a = invite_regular(&db, "user_a", "passfora", "User A").await;
+    let user_a = invite_regular(&db, "user_a", "passfora").await;
 
-    let chats = db.list_chats(user_a, 100, 1).await.unwrap().chats;
-    assert_eq!(chats.len(), 1);
-    assert_eq!(chats[0].id, 2);
-    assert_eq!(chats[0].display_name, None);
-    assert_eq!(chats[0].kind, ChatKind::WithSelf);
+    let chats = list_user_chats(&db, user_a).await;
+    assert_eq!(chats.len(), 2);
+    assert!(!find_matching_chats(&db, user_a, ChatKind::WithSelf, None)
+        .await
+        .is_empty());
 
-    let self_chat_a_id = chats[0].id;
+    let self_chat_a_id = find_chat_id(&db, user_a, ChatKind::WithSelf, None).await;
     db.send_message(user_a, self_chat_a_id, msg_a_1)
         .await
         .unwrap();
@@ -92,7 +125,7 @@ async fn create_chat_with_self() {
     assert_eq!(messages[1].text.as_deref(), Some(msg_a_2));
 
     // try to read A's chat from B
-    let user_b = invite_regular(&db, "user_b", "passforb", "User B").await;
+    let user_b = invite_regular(&db, "user_b", "passforb").await;
     db.list_messages(user_b, self_chat_a_id, 100, 1)
         .await
         .unwrap_err();
@@ -112,11 +145,11 @@ async fn create_private_chat() {
     let msg_c_7 = "Hi all?";
 
     let (alias_a, alias_b, alias_c) = ("its_benjamin", "fuance", "thirdparty");
-    let user_a = invite_regular(&db, alias_a, "kobrabor", "Benjamin Dover").await;
-    let user_b = invite_regular(&db, alias_b, "bobrabor", "Le Baguette").await;
-    let user_c = invite_regular(&db, alias_c, "borborbor", "Other User").await;
+    let user_a = invite_regular(&db, alias_a, "kobrabor").await;
+    let user_b = invite_regular(&db, alias_b, "bobrabor").await;
+    let user_c = invite_regular(&db, alias_c, "borborbor").await;
 
-    let chat_id = db.create_private_chat(user_a, alias_b).await.unwrap();
+    let chat_id = find_chat_id(&db, user_a, ChatKind::Private, Some(alias_b)).await;
     db.send_message(user_a, chat_id, msg_a_1).await.unwrap();
     db.send_message(user_b, chat_id, msg_b_2).await.unwrap();
     db.send_message(user_b, chat_id, msg_b_3).await.unwrap();
@@ -142,36 +175,87 @@ async fn create_private_chat() {
     assert_eq!(reading_b.messages.len(), 6);
 
     // try to create same chat but in reverse
-    let _chat_id = db.create_private_chat(user_b, alias_a).await.unwrap_err();
-    let user_a_chats = db.list_chats(user_a, 100, 1).await.unwrap();
+    let duplicate = db.create_private_chat(user_b, alias_a).await.unwrap_err();
+    assert!(matches!(
+        duplicate,
+        RequestError::Validation(ValidationError::AlreadyExists)
+    ));
+    assert_eq!(count_chats_by_kind(&db, user_a, ChatKind::Private).await, 3);
+    let user_a_chats = list_user_chats(&db, user_a).await;
+    let user_a_private_chat = user_a_chats.iter().find(|c| c.id == chat_id).unwrap();
+    assert_eq!(user_a_private_chat.display_name.as_deref(), Some(alias_b));
+
+    assert_eq!(count_chats_by_kind(&db, user_b, ChatKind::Private).await, 3);
+    let user_b_chats = list_user_chats(&db, user_b).await;
+    let user_b_private_chat = user_b_chats.iter().find(|c| c.id == chat_id).unwrap();
+    assert_eq!(user_b_private_chat.display_name.as_deref(), Some(alias_a));
+}
+
+#[tokio::test]
+async fn invite_user_creates_private_chats_with_all_existing_users() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let origin_user_id = 1;
+    let user_a = invite_regular(&db, "existing_a", "passfora").await;
+    let user_b = invite_regular(&db, "existing_b", "passforb").await;
+
+    let new_user_alias = "new_joiner";
+    let new_user_id = db
+        .invite_user(origin_user_id, new_user_alias, "passfornewjoiner")
+        .await
+        .unwrap();
+
+    let new_user_chats = list_user_chats(&db, new_user_id).await;
+    assert_eq!(new_user_chats.len(), 4);
     assert_eq!(
-        user_a_chats
-            .chats
-            .iter()
-            .filter(|c| c.kind == ChatKind::Private)
-            .count(),
+        count_chats_by_kind(&db, new_user_id, ChatKind::WithSelf).await,
         1
-    );
-    let user_a_private_chat = user_a_chats.chats.iter().find(|c| c.id == chat_id).unwrap();
-    assert_eq!(
-        user_a_private_chat.display_name.as_deref(),
-        Some("Le Baguette")
     );
 
-    let user_b_chats = db.list_chats(user_b, 100, 1).await.unwrap();
+    let mut private_peers: Vec<String> = new_user_chats
+        .iter()
+        .filter(|chat| chat.kind == ChatKind::Private)
+        .map(|chat| chat.display_name.clone().unwrap())
+        .collect();
+    private_peers.sort();
     assert_eq!(
-        user_b_chats
-            .chats
-            .iter()
-            .filter(|c| c.kind == ChatKind::Private)
-            .count(),
-        1
+        private_peers,
+        vec!["Origin User", "existing_a", "existing_b"]
     );
-    let user_b_private_chat = user_b_chats.chats.iter().find(|c| c.id == chat_id).unwrap();
-    assert_eq!(
-        user_b_private_chat.display_name.as_deref(),
-        Some("Benjamin Dover")
+
+    assert!(
+        !find_matching_chats(&db, user_a, ChatKind::Private, Some(new_user_alias))
+            .await
+            .is_empty()
     );
+    assert!(
+        !find_matching_chats(&db, user_b, ChatKind::Private, Some(new_user_alias))
+            .await
+            .is_empty()
+    );
+    assert!(
+        !find_matching_chats(&db, origin_user_id, ChatKind::Private, Some(new_user_alias))
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn invite_user_requires_admin_role() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let inviter = invite_regular(&db, "not_admin", "passforadmin").await;
+
+    let err = db
+        .invite_user(inviter, "should_fail", "passfornewuser")
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        RequestError::Validation(ValidationError::InsufficientPermissions { .. })
+    ));
 }
 
 #[tokio::test]
@@ -179,9 +263,9 @@ async fn list_messages_pagination() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
 
-    let user_a = invite_regular(&db, "pager_a", "pagerpassa", "Pager A").await;
-    let _user_b = invite_regular(&db, "pager_b", "pagerpassb", "Pager B").await;
-    let chat_id = db.create_private_chat(user_a, "pager_b").await.unwrap();
+    let user_a = invite_regular(&db, "pager_a", "pagerpassa").await;
+    let _user_b = invite_regular(&db, "pager_b", "pagerpassb").await;
+    let chat_id = find_chat_id(&db, user_a, ChatKind::Private, Some("pager_b")).await;
 
     db.send_message(user_a, chat_id, "msg_1").await.unwrap();
     db.send_message(user_a, chat_id, "msg_2").await.unwrap();
@@ -230,10 +314,10 @@ async fn login_and_resolve_session() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
 
-    let (alias_a, pass_a, name_a) = ("existing_user_a", "existing_password_a", "User A");
-    let (alias_b, pass_b, name_b) = ("existing_user_b", "existing_password_b", "User B");
-    let user_id_a = invite_regular(&db, alias_a, pass_a, name_a).await;
-    let user_id_b = invite_regular(&db, alias_b, pass_b, name_b).await;
+    let (alias_a, pass_a) = ("existing_user_a", "existing_password_a");
+    let (alias_b, pass_b) = ("existing_user_b", "existing_password_b");
+    let user_id_a = invite_regular(&db, alias_a, pass_a).await;
+    let user_id_b = invite_regular(&db, alias_b, pass_b).await;
 
     // invalid variants
     let result = db
@@ -265,8 +349,8 @@ async fn change_password() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
 
-    let (alias, pass, name) = ("existing_user_a", "existing_password_a", "User A");
-    let user_id = invite_regular(&db, alias, pass, name).await;
+    let (alias, pass) = ("existing_user_a", "existing_password_a");
+    let user_id = invite_regular(&db, alias, pass).await;
     let new_password = "updated_password_a";
 
     let current_session = db.login(alias, pass).await.unwrap();
@@ -306,8 +390,8 @@ async fn limit_sessions_count() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
 
-    let (alias, pass, name) = ("existing_user_a", "existing_password_a", "User A");
-    let _ = invite_regular(&db, alias, pass, name).await;
+    let (alias, pass) = ("existing_user_a", "existing_password_a");
+    let _ = invite_regular(&db, alias, pass).await;
 
     let first_session = db.login(alias, pass).await.unwrap();
     let _ok = resolve_session(&db, &first_session).await.unwrap();
@@ -331,8 +415,8 @@ async fn logout() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
 
-    let (alias, pass, name) = ("existing_user_a", "existing_pass_a", "User A");
-    let _ = invite_regular(&db, alias, pass, name).await;
+    let (alias, pass) = ("existing_user_a", "existing_pass_a");
+    let _ = invite_regular(&db, alias, pass).await;
 
     let session = db.login(alias, pass).await.unwrap();
     let _ok = resolve_session(&db, &session).await.unwrap();
@@ -349,8 +433,8 @@ async fn refresh_token() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
 
-    let (alias, pass, name) = ("existing_user_a", "existing_pass_a", "User A");
-    let _ = invite_regular(&db, alias, pass, name).await;
+    let (alias, pass) = ("existing_user_a", "existing_pass_a");
+    let _ = invite_regular(&db, alias, pass).await;
 
     let first_session = db.login(alias, pass).await.unwrap();
     let _ok = resolve_session(&db, &first_session).await.unwrap();
