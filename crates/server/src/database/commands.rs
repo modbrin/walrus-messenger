@@ -21,7 +21,9 @@ use crate::models::chat::{ChatId, ChatKind, ChatRole};
 use crate::models::message::MessageId;
 use crate::models::resource::ResourceId;
 use crate::models::session::SessionId;
-use crate::models::user::{validate_user_alias, validate_user_password, UserId, UserRole};
+use crate::models::user::{
+    validate_user_alias, validate_user_display_name, validate_user_password, UserId, UserRole,
+};
 
 /// Number of sessions single account can have, older sessions will be silently removed when new are added,
 /// old sessions are determined by `access_token_expires_at`
@@ -180,6 +182,40 @@ impl DbConnection {
         update_user_password(transaction.as_mut(), caller, &new_hash).await?;
         remove_sessions_for_user_except(transaction.as_mut(), caller, current_session).await?;
         transaction.commit().await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn change_alias(&self, caller: UserId, new_alias: &str) -> Result<(), RequestError> {
+        validate_user_alias(new_alias)?;
+        let updated = match update_user_alias(self.pool(), caller, new_alias).await {
+            Ok(updated) => updated,
+            Err(error) => {
+                if let SqlxError::Database(db_error) = &error {
+                    if db_error.is_unique_violation() {
+                        return Err(ValidationError::AlreadyExists.into());
+                    }
+                }
+                return Err(error.into());
+            }
+        };
+        if !updated {
+            return Err(ValidationError::NotFound.into());
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn change_display_name(
+        &self,
+        caller: UserId,
+        new_display_name: &str,
+    ) -> Result<(), RequestError> {
+        validate_user_display_name(new_display_name)?;
+        let updated = update_user_display_name(self.pool(), caller, new_display_name).await?;
+        if !updated {
+            return Err(ValidationError::NotFound.into());
+        }
         Ok(())
     }
 
@@ -364,6 +400,46 @@ pub(super) async fn update_user_password<'a, E: PgExecutor<'a>>(
     .execute(executor)
     .await?;
     Ok(())
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn update_user_alias<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    new_alias: &str,
+) -> Result<bool, SqlxError> {
+    let result = sqlx::query(
+        "
+        UPDATE users
+        SET alias = $1
+        WHERE id = $2;
+    ",
+    )
+    .bind(new_alias)
+    .bind(user_id)
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() != 0)
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn update_user_display_name<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    new_display_name: &str,
+) -> Result<bool, SqlxError> {
+    let result = sqlx::query(
+        "
+        UPDATE users
+        SET display_name = $1
+        WHERE id = $2;
+    ",
+    )
+    .bind(new_display_name)
+    .bind(user_id)
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() != 0)
 }
 
 #[instrument(skip(executor))]

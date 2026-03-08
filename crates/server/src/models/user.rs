@@ -21,6 +21,16 @@ pub struct ChangePasswordRequest {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct ChangeAliasRequest {
+    pub new_alias: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChangeDisplayNameRequest {
+    pub new_display_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct InviteUserRequest {
     pub alias: String,
     pub password: String,

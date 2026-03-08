@@ -386,6 +386,100 @@ async fn change_password() {
 }
 
 #[tokio::test]
+async fn change_alias() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let (old_alias, pass) = ("existing_user_a", "existing_password_a");
+    let user_id = invite_regular(&db, old_alias, pass).await;
+    let taken_alias = "existing_user_b";
+    let _other_user = invite_regular(&db, taken_alias, "existing_password_b").await;
+
+    let new_alias = "renamed_user_a";
+    db.change_alias(user_id, new_alias).await.unwrap();
+
+    let old_login_result = db.login(old_alias, pass).await.unwrap_err();
+    assert!(matches!(old_login_result, RequestError::BadCredentials));
+
+    let new_login_result = db.login(new_alias, pass).await.unwrap();
+    let resolved_user = resolve_session(&db, &new_login_result).await.unwrap();
+    assert_eq!(resolved_user, user_id);
+
+    let duplicate_err = db.change_alias(user_id, taken_alias).await.unwrap_err();
+    assert!(matches!(
+        duplicate_err,
+        RequestError::Validation(ValidationError::AlreadyExists)
+    ));
+
+    let invalid_err = db.change_alias(user_id, "bad alias").await.unwrap_err();
+    assert!(matches!(
+        invalid_err,
+        RequestError::Validation(ValidationError::InvalidInput { .. })
+    ));
+}
+
+#[tokio::test]
+async fn change_display_name() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let user_a = invite_regular(&db, "existing_user_a", "existing_password_a").await;
+    let user_b_alias = "existing_user_b";
+    let user_b = invite_regular(&db, user_b_alias, "existing_password_b").await;
+
+    assert!(
+        !find_matching_chats(&db, user_a, ChatKind::Private, Some(user_b_alias))
+            .await
+            .is_empty()
+    );
+
+    let new_display_name = "Baker Ben";
+    db.change_display_name(user_b, new_display_name)
+        .await
+        .unwrap();
+
+    assert!(
+        find_matching_chats(&db, user_a, ChatKind::Private, Some(user_b_alias))
+            .await
+            .is_empty()
+    );
+    assert!(
+        !find_matching_chats(&db, user_a, ChatKind::Private, Some(new_display_name))
+            .await
+            .is_empty()
+    );
+
+    let user_b_login = db.login(user_b_alias, "existing_password_b").await.unwrap();
+    let resolved_user_b = resolve_session(&db, &user_b_login).await.unwrap();
+    assert_eq!(resolved_user_b, user_b);
+
+    let empty_err = db.change_display_name(user_b, "").await.unwrap_err();
+    assert!(matches!(
+        empty_err,
+        RequestError::Validation(ValidationError::InvalidInput { .. })
+    ));
+
+    let padded_err = db
+        .change_display_name(user_b, " Display Name ")
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        padded_err,
+        RequestError::Validation(ValidationError::InvalidInput { .. })
+    ));
+
+    let too_long_display_name = "x".repeat(31);
+    let too_long_err = db
+        .change_display_name(user_b, &too_long_display_name)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        too_long_err,
+        RequestError::Validation(ValidationError::InvalidInput { .. })
+    ));
+}
+
+#[tokio::test]
 async fn limit_sessions_count() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;

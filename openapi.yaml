@@ -220,6 +220,90 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /auth/change-alias:
+    post:
+      tags: [auth]
+      summary: Change current user alias
+      operationId: changeAlias
+      description: Validates and updates alias used for future logins.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeAliasRequest'
+      responses:
+        '204':
+          description: Alias changed
+        '400':
+          description: Missing or malformed bearer token, invalid alias, or alias already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/change-display-name:
+    post:
+      tags: [auth]
+      summary: Change current user display name
+      operationId: changeDisplayName
+      description: Validates and updates display name shown in chats/messages.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeDisplayNameRequest'
+      responses:
+        '204':
+          description: Display name changed
+        '400':
+          description: Missing or malformed bearer token, or invalid display name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /users/invite:
     post:
       tags: [auth]
@@ -505,6 +589,26 @@ components:
           type: string
           minLength: 8
           maxLength: 80
+
+    ChangeAliasRequest:
+      type: object
+      additionalProperties: false
+      required: [new_alias]
+      properties:
+        new_alias:
+          type: string
+          minLength: 1
+          maxLength: 30
+
+    ChangeDisplayNameRequest:
+      type: object
+      additionalProperties: false
+      required: [new_display_name]
+      properties:
+        new_display_name:
+          type: string
+          minLength: 1
+          maxLength: 30
 
     InviteUserRequest:
       type: object

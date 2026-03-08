@@ -17,7 +17,8 @@ use crate::models::message::{
     validate_message_text, ListMessagesResponse, SendMessageRequest, SendMessageResponse,
 };
 use crate::models::user::{
-    ChangePasswordRequest, InviteUserRequest, InviteUserResponse, WhoAmIResponse,
+    ChangeAliasRequest, ChangeDisplayNameRequest, ChangePasswordRequest, InviteUserRequest,
+    InviteUserResponse, WhoAmIResponse,
 };
 use crate::server::constants::MAX_REQUEST_BODY_BYTES;
 use crate::server::state::AppState;
@@ -30,6 +31,8 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
         .route("/auth/change-password", post(change_password))
+        .route("/auth/change-alias", post(change_alias))
+        .route("/auth/change-display-name", post(change_display_name))
         .route("/auth/logout", post(logout))
         .route("/users/invite", post(invite_user))
         .route("/chats", get(list_chats))
@@ -103,6 +106,30 @@ pub async fn change_password(
             &payload.current_password,
             &payload.new_password,
         )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn change_alias(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Json(payload): Json<ChangeAliasRequest>,
+) -> Result<StatusCode, RequestError> {
+    state
+        .db_connection
+        .change_alias(claims.user_id, &payload.new_alias)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn change_display_name(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Json(payload): Json<ChangeDisplayNameRequest>,
+) -> Result<StatusCode, RequestError> {
+    state
+        .db_connection
+        .change_display_name(claims.user_id, &payload.new_display_name)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
