@@ -14,7 +14,7 @@ use crate::auth::utils::{
 use crate::database::connection::DbConnection;
 use crate::database::queries::{
     get_refresh_token, get_user_credentials_by_alias, get_user_credentials_by_user_id,
-    get_user_id_by_alias, get_user_role, is_user_in_chat,
+    get_user_id_by_alias, get_user_role, is_user_in_chat, list_user_ids,
 };
 use crate::error::{RequestError, ValidationError};
 use crate::models::chat::{ChatId, ChatKind, ChatRole};
@@ -22,8 +22,7 @@ use crate::models::message::MessageId;
 use crate::models::resource::ResourceId;
 use crate::models::session::SessionId;
 use crate::models::user::{
-    validate_user_alias, validate_user_display_name, validate_user_password, InviteUserRequest,
-    UserId, UserRole,
+    validate_user_alias, validate_user_display_name, validate_user_password, UserId, UserRole,
 };
 
 /// Number of sessions single account can have, older sessions will be silently removed when new are added,
@@ -31,11 +30,12 @@ use crate::models::user::{
 pub const MAX_SESSIONS_PER_USER: i32 = 100;
 
 impl DbConnection {
-    #[instrument(skip(self, request))]
+    #[instrument(skip(self, initial_password))]
     pub async fn invite_user(
         &self,
         caller: UserId,
-        request: InviteUserRequest,
+        alias: &str,
+        initial_password: &str,
     ) -> Result<UserId, RequestError> {
         let mut transaction = self.pool().begin().await?;
         let current_role = get_user_role(transaction.as_mut(), caller).await?.role;
@@ -47,20 +47,35 @@ impl DbConnection {
             }
             .into());
         }
-        validate_user_alias(&request.alias)?;
-        validate_user_display_name(&request.display_name)?;
-        validate_user_password(&request.initial_password)?;
-        let password_hash = hash_password(&request.initial_password);
-        let user_id = create_user(
+
+        validate_user_alias(alias)?;
+        validate_user_password(initial_password)?;
+        let existing_user_ids = list_user_ids(transaction.as_mut()).await?;
+        let password_hash = hash_password(initial_password);
+        let user_id = match create_user(
             transaction.as_mut(),
-            &request.alias,
-            &request.display_name,
+            alias,
+            alias,
             &password_hash,
-            request.role,
+            UserRole::Regular,
             Some(caller),
         )
-        .await?;
+        .await
+        {
+            Ok(user_id) => user_id,
+            Err(error) => {
+                if let SqlxError::Database(db_error) = &error {
+                    if db_error.is_unique_violation() {
+                        return Err(ValidationError::AlreadyExists.into());
+                    }
+                }
+                return Err(error.into());
+            }
+        };
         let _ = create_with_self_chat(&mut transaction, user_id).await?;
+        for peer_user_id in existing_user_ids {
+            let _ = create_private_chat(&mut transaction, user_id, peer_user_id).await?;
+        }
         transaction.commit().await?;
         Ok(user_id)
     }
@@ -171,22 +186,79 @@ impl DbConnection {
     }
 
     #[instrument(skip(self))]
+    pub async fn change_alias(&self, caller: UserId, new_alias: &str) -> Result<(), RequestError> {
+        validate_user_alias(new_alias)?;
+        let updated = match update_user_alias(self.pool(), caller, new_alias).await {
+            Ok(updated) => updated,
+            Err(error) => {
+                if let SqlxError::Database(db_error) = &error {
+                    if db_error.is_unique_violation() {
+                        return Err(ValidationError::AlreadyExists.into());
+                    }
+                }
+                return Err(error.into());
+            }
+        };
+        if !updated {
+            return Err(ValidationError::NotFound.into());
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn change_display_name(
+        &self,
+        caller: UserId,
+        new_display_name: &str,
+    ) -> Result<(), RequestError> {
+        validate_user_display_name(new_display_name)?;
+        let updated = update_user_display_name(self.pool(), caller, new_display_name).await?;
+        if !updated {
+            return Err(ValidationError::NotFound.into());
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
     pub async fn send_message(
         &self,
         caller: UserId,
         chat_id: ChatId,
         text: &str,
     ) -> Result<MessageId, RequestError> {
-        // TODO: should be cached?
-        if is_user_in_chat(self.pool(), chat_id, caller).await? {
-            let message_id =
-                create_message(self.pool(), chat_id, caller, Some(text), None, None).await?;
-            debug!("sent message in chat");
-            Ok(message_id)
-        } else {
+        let mut transaction = self.pool().begin().await?;
+        if !is_user_in_chat(transaction.as_mut(), chat_id, caller).await? {
             debug!("attempt to send message but user is not in chat");
-            Err(ValidationError::NotFound.into())
+            return Err(ValidationError::NotFound.into());
         }
+        let message_id = create_message(
+            transaction.as_mut(),
+            chat_id,
+            caller,
+            Some(text),
+            None,
+            None,
+        )
+        .await?;
+        update_chat_last_message(transaction.as_mut(), chat_id, message_id).await?;
+        transaction.commit().await?;
+        debug!("sent message in chat");
+        Ok(message_id)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn mark_chat_read(
+        &self,
+        caller: UserId,
+        chat_id: ChatId,
+        up_to_message_id: MessageId,
+    ) -> Result<(), RequestError> {
+        let updated =
+            update_chat_read_cursor(self.pool(), caller, chat_id, up_to_message_id).await?;
+        if !updated {
+            return Err(ValidationError::NotFound.into());
+        }
+        Ok(())
     }
 
     #[instrument(skip(self, password))]
@@ -354,6 +426,46 @@ pub(super) async fn update_user_password<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
+pub(super) async fn update_user_alias<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    new_alias: &str,
+) -> Result<bool, SqlxError> {
+    let result = sqlx::query(
+        "
+        UPDATE users
+        SET alias = $1
+        WHERE id = $2;
+    ",
+    )
+    .bind(new_alias)
+    .bind(user_id)
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() != 0)
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn update_user_display_name<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    new_display_name: &str,
+) -> Result<bool, SqlxError> {
+    let result = sqlx::query(
+        "
+        UPDATE users
+        SET display_name = $1
+        WHERE id = $2;
+    ",
+    )
+    .bind(new_display_name)
+    .bind(user_id)
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() != 0)
+}
+
+#[instrument(skip(executor))]
 pub(super) async fn add_member_to_chat<'a, E: PgExecutor<'a>>(
     executor: E,
     user_id: UserId,
@@ -400,6 +512,62 @@ pub(super) async fn create_message<'a, E: PgExecutor<'a>>(
     .try_get("id")?;
     debug!("created message with id: {}", result);
     Ok(result)
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn update_chat_last_message<'a, E: PgExecutor<'a>>(
+    executor: E,
+    chat_id: ChatId,
+    message_id: MessageId,
+) -> Result<(), SqlxError> {
+    sqlx::query(
+        "
+        UPDATE chats
+        SET
+            last_message_id = message.id,
+            last_message_at = message.created_at
+        FROM messages AS message
+        WHERE
+            chats.id = $1
+            AND message.id = $2
+            AND message.chat_id = chats.id
+            AND (chats.last_message_id IS NULL OR chats.last_message_id < message.id);
+    ",
+    )
+    .bind(chat_id)
+    .bind(message_id)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn update_chat_read_cursor<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    chat_id: ChatId,
+    up_to_message_id: MessageId,
+) -> Result<bool, SqlxError> {
+    let result = sqlx::query(
+        "
+        UPDATE chats_members
+        SET last_read_message_id = GREATEST(COALESCE(last_read_message_id, 0::bigint), $3)
+        WHERE
+            user_id = $1
+            AND chat_id = $2
+            AND EXISTS (
+                SELECT 1
+                FROM messages
+                WHERE messages.id = $3 AND messages.chat_id = $2
+            );
+    ",
+    )
+    .bind(user_id)
+    .bind(chat_id)
+    .bind(up_to_message_id)
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() != 0)
 }
 
 #[instrument(skip(transaction))]

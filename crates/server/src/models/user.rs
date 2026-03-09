@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 
 use crate::error::ValidationError;
@@ -9,14 +9,45 @@ const USER_ALIAS_LENGTH_LIMIT: usize = 30;
 const USER_PASSWORD_MIN_LENGTH: usize = 8;
 const USER_PASSWORD_MAX_LENGTH: usize = 80;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
 pub struct WhoAmIResponse {
+    pub user_id: UserId,
+    pub alias: String,
+    pub display_name: String,
+    pub role: UserRole,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChangeAliasRequest {
+    pub new_alias: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChangeDisplayNameRequest {
+    pub new_display_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct InviteUserRequest {
+    pub alias: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InviteUserResponse {
     pub user_id: UserId,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Display, sqlx::Type)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Display, Serialize, sqlx::Type)]
 #[sqlx(type_name = "user_role")]
 #[sqlx(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum UserRole {
     Admin,
     Regular,
@@ -29,14 +60,6 @@ pub struct CreateUserRequest {
     pub role: UserRole,
     pub password_hash: String,
     pub invited_by: Option<UserId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct InviteUserRequest {
-    pub alias: String,
-    pub display_name: String,
-    pub role: UserRole,
-    pub initial_password: String,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]

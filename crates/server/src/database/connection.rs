@@ -16,6 +16,7 @@ impl DbConfig {
     const ADDRESS_FALLBACK: &'static str = "localhost";
     const MAX_CONN_FALLBACK: u32 = 5;
 
+    #[cfg(test)]
     pub fn development(dbname: &str, username: &str, password: &str) -> Self {
         Self {
             dbname: dbname.to_string(),

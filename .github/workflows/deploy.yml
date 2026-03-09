@@ -14,7 +14,43 @@ permissions:
   packages: write
 
 jobs:
+  verify-tag-version:
+    name: Verify Tag Matches Crate Version
+    runs-on: ubuntu-latest
+    outputs:
+      crate_version: ${{ steps.version.outputs.crate_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read crate version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate_version="$(sed -nE 's/^version = "(.*)"$/\1/p' crates/server/Cargo.toml | head -n1)"
+          if [[ -z "${crate_version}" ]]; then
+            echo "Failed to read crate version from crates/server/Cargo.toml" >&2
+            exit 1
+          fi
+          echo "crate_version=${crate_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify pushed tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          crate_version="${{ steps.version.outputs.crate_version }}"
+
+          if [[ "${tag}" != "${crate_version}" && "${tag}" != "v${crate_version}" ]]; then
+            echo "Tag '${tag}' does not match crate version '${crate_version}'." >&2
+            echo "Use '${crate_version}' or 'v${crate_version}'." >&2
+            exit 1
+          fi
+
   build-and-push:
+    needs:
+      - verify-tag-version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -69,9 +69,9 @@ paths:
   /auth/whoami:
     get:
       tags: [auth]
-      summary: Resolve current user by access token
+      summary: Resolve current user profile by access token
       operationId: whoAmI
-      description: Validates bearer access token and returns authenticated user id.
+      description: Validates bearer access token and returns authenticated user profile.
       security:
         - bearerAuth: []
       responses:
@@ -191,7 +191,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChangePasswordPayload'
+              $ref: '#/components/schemas/ChangePasswordRequest'
       responses:
         '204':
           description: Password changed
@@ -220,6 +220,138 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /auth/change-alias:
+    post:
+      tags: [auth]
+      summary: Change current user alias
+      operationId: changeAlias
+      description: Validates and updates alias used for future logins.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeAliasRequest'
+      responses:
+        '204':
+          description: Alias changed
+        '400':
+          description: Missing or malformed bearer token, invalid alias, or alias already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/change-display-name:
+    post:
+      tags: [auth]
+      summary: Change current user display name
+      operationId: changeDisplayName
+      description: Validates and updates display name shown in chats/messages.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeDisplayNameRequest'
+      responses:
+        '204':
+          description: Display name changed
+        '400':
+          description: Missing or malformed bearer token, or invalid display name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/invite:
+    post:
+      tags: [auth]
+      summary: Invite user and bootstrap direct chats
+      operationId: inviteUser
+      description: >
+        Admin-only endpoint. Creates a regular user from alias/password and immediately creates
+        private chats between that user and every existing user.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteUserResponse'
+        '400':
+          description: Invalid payload, insufficient permissions, or user alias already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /chats:
     get:
       tags: [messaging]
@@ -228,6 +360,7 @@ paths:
       description: >
         Returns paginated chats visible to current user.
         `display_name` is normalized for UI list usage; for private chats it resolves to peer display name.
+        Includes latest message preview fields and per-chat unread counter.
         Uses page mode parameters: `limit` and `page`.
       security:
         - bearerAuth: []
@@ -264,6 +397,63 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /chats/{chat_id}/read:
+    post:
+      tags: [messaging]
+      summary: Mark chat messages as read
+      operationId: markChatRead
+      description: >
+        Advances current user's read cursor in a chat up to a specific message id.
+        Cursor updates are monotonic and never move backwards.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: chat_id
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkChatReadRequest'
+      responses:
+        '204':
+          description: Read cursor updated
+        '400':
+          description: Invalid payload or malformed token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Chat/message not found or user has no access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
           content:
             application/json:
               schema:
@@ -445,7 +635,7 @@ components:
           minLength: 1
           description: Opaque refresh token returned by /auth/login or /auth/refresh.
 
-    ChangePasswordPayload:
+    ChangePasswordRequest:
       type: object
       additionalProperties: false
       required: [current_password, new_password]
@@ -458,7 +648,41 @@ components:
           minLength: 8
           maxLength: 80
 
-    WhoAmIResponse:
+    ChangeAliasRequest:
+      type: object
+      additionalProperties: false
+      required: [new_alias]
+      properties:
+        new_alias:
+          type: string
+          minLength: 1
+          maxLength: 30
+
+    ChangeDisplayNameRequest:
+      type: object
+      additionalProperties: false
+      required: [new_display_name]
+      properties:
+        new_display_name:
+          type: string
+          minLength: 1
+          maxLength: 30
+
+    InviteUserRequest:
+      type: object
+      additionalProperties: false
+      required: [alias, password]
+      properties:
+        alias:
+          type: string
+          minLength: 1
+          maxLength: 30
+        password:
+          type: string
+          minLength: 8
+          maxLength: 80
+
+    InviteUserResponse:
       type: object
       additionalProperties: false
       required: [user_id]
@@ -466,6 +690,21 @@ components:
         user_id:
           type: integer
           format: int32
+
+    WhoAmIResponse:
+      type: object
+      additionalProperties: false
+      required: [user_id, alias, display_name, role]
+      properties:
+        user_id:
+          type: integer
+          format: int32
+        alias:
+          type: string
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
 
     TokenExchangePayload:
       type: object
@@ -493,10 +732,15 @@ components:
       type: string
       enum: [with_self, private, group, channel]
 
+    UserRole:
+      type: string
+      enum: [admin, regular]
+
     ChatResponse:
       type: object
       additionalProperties: false
-      required: [id, display_name, kind]
+      required:
+        [id, display_name, kind, last_message_id, last_message_text, last_message_at, unread_count]
       properties:
         id:
           type: integer
@@ -506,6 +750,20 @@ components:
           nullable: true
         kind:
           $ref: '#/components/schemas/ChatKind'
+        last_message_id:
+          type: integer
+          format: int64
+          nullable: true
+        last_message_text:
+          type: string
+          nullable: true
+        last_message_at:
+          type: string
+          format: date-time
+          nullable: true
+        unread_count:
+          type: integer
+          format: int64
 
     ListChatsResponse:
       type: object
@@ -562,6 +820,16 @@ components:
           type: string
           minLength: 1
           maxLength: 4096
+
+    MarkChatReadRequest:
+      type: object
+      additionalProperties: false
+      required: [up_to_message_id]
+      properties:
+        up_to_message_id:
+          type: integer
+          format: int64
+          minimum: 1
 
     SendMessageResponse:
       type: object
