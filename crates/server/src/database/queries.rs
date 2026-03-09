@@ -5,9 +5,7 @@ use crate::auth::utils::current_time;
 use crate::database::connection::DbConnection;
 use crate::database::utils::map_not_found_as_none;
 use crate::error::{RequestError, SessionError, ValidationError};
-use crate::models::chat::{
-    ChatId, ChatResponse, IsUserInChatResponse, ListChatsResponse, PrivateChatExistsResponse,
-};
+use crate::models::chat::{ChatId, ChatResponse, IsUserInChatResponse, ListChatsResponse};
 use crate::models::message::{ListMessagesResponse, MessageId, MessageResponse};
 use crate::models::session::{RefreshTokenResponse, ResolveSessionResponse, SessionId};
 use crate::models::user::{
@@ -239,33 +237,6 @@ pub(super) async fn is_user_in_chat<'a, E: PgExecutor<'a>>(
     .fetch_one(executor)
     .await?;
     Ok(result.is_in_chat)
-}
-
-#[instrument(skip(executor))]
-pub(super) async fn private_chat_exists<'a, E: PgExecutor<'a>>(
-    executor: E,
-    user_id_a: UserId,
-    user_id_b: UserId,
-) -> Result<bool, SqlxError> {
-    let (user_id_low, user_id_high) = if user_id_a < user_id_b {
-        (user_id_a, user_id_b)
-    } else {
-        (user_id_b, user_id_a)
-    };
-    let result: PrivateChatExistsResponse = sqlx::query_as(
-        "
-    SELECT EXISTS(
-        SELECT 1
-        FROM private_chats
-        WHERE user_id_low = $1 AND user_id_high = $2
-    ) as chat_exists;
-    ",
-    )
-    .bind(user_id_low)
-    .bind(user_id_high)
-    .fetch_one(executor)
-    .await?;
-    Ok(result.chat_exists)
 }
 
 #[instrument(skip(executor))]

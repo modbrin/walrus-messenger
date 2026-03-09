@@ -1,7 +1,12 @@
 # Roadmap
 
 1. Improve messaging for production use
-   Refine and extend the API for real-time messaging, including delivery flow, synchronization, notifications support, message edit/remove flows, and production-ready client/server behavior.
+   - Refine and extend the API for real-time messaging.
+   - Improve delivery flow and synchronization.
+   - Add notifications support.
+   - Add message edit and remove flows.
+   - Investigate session re-login support.
+   - Harden client/server behavior for production use.
 
 2. Add resource storage for images and files
    Implement proper resource APIs for uploads and downloads, including previews, compression, and S3-backed storage.

@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use thiserror::Error;
 use tracing::error;
 
@@ -69,8 +69,7 @@ impl IntoResponse for RequestError {
             e @ Self::Interrupted => (StatusCode::CONFLICT, e.to_string()),
             e @ Self::Expired => (StatusCode::UNAUTHORIZED, e.to_string()),
         };
-        let error = json!({ "error": error }).to_string();
-        (status, error).into_response()
+        (status, Json(ErrorResponse { error })).into_response()
     }
 }
 
@@ -83,20 +82,28 @@ pub enum SessionError {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct ErrorResponse<'a> {
-    error: &'a str,
+struct ErrorResponse {
+    error: String,
 }
 
 impl IntoResponse for SessionError {
     fn into_response(self) -> Response {
         let (status, error) = match self {
-            Self::BadToken => (StatusCode::BAD_REQUEST, "Missing or bad token in request"),
-            Self::TokenNotFound => (StatusCode::UNAUTHORIZED, "Token cannot be found"),
-            Self::TokenExpired => (StatusCode::UNAUTHORIZED, "Token has expired"),
-            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong"),
+            Self::BadToken => (
+                StatusCode::BAD_REQUEST,
+                "Missing or bad token in request".to_string(),
+            ),
+            Self::TokenNotFound => (
+                StatusCode::UNAUTHORIZED,
+                "Token cannot be found".to_string(),
+            ),
+            Self::TokenExpired => (StatusCode::UNAUTHORIZED, "Token has expired".to_string()),
+            Self::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Something went wrong".to_string(),
+            ),
         };
-        let error = json!({ "error": error }).to_string();
-        (status, error).into_response()
+        (status, Json(ErrorResponse { error })).into_response()
     }
 }
 

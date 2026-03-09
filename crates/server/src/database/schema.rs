@@ -35,6 +35,7 @@ impl DbConnection {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn drop_schema(&self) -> Result<(), SqlxError> {
         // Revert all applied reversible migrations (versions > -1 includes 0-prefixed migration).
         MIGRATOR.undo(self.pool(), -1).await?;
