@@ -226,16 +226,39 @@ impl DbConnection {
         chat_id: ChatId,
         text: &str,
     ) -> Result<MessageId, RequestError> {
-        // TODO: should be cached?
-        if is_user_in_chat(self.pool(), chat_id, caller).await? {
-            let message_id =
-                create_message(self.pool(), chat_id, caller, Some(text), None, None).await?;
-            debug!("sent message in chat");
-            Ok(message_id)
-        } else {
+        let mut transaction = self.pool().begin().await?;
+        if !is_user_in_chat(transaction.as_mut(), chat_id, caller).await? {
             debug!("attempt to send message but user is not in chat");
-            Err(ValidationError::NotFound.into())
+            return Err(ValidationError::NotFound.into());
         }
+        let message_id = create_message(
+            transaction.as_mut(),
+            chat_id,
+            caller,
+            Some(text),
+            None,
+            None,
+        )
+        .await?;
+        update_chat_last_message(transaction.as_mut(), chat_id, message_id).await?;
+        transaction.commit().await?;
+        debug!("sent message in chat");
+        Ok(message_id)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn mark_chat_read(
+        &self,
+        caller: UserId,
+        chat_id: ChatId,
+        up_to_message_id: MessageId,
+    ) -> Result<(), RequestError> {
+        let updated =
+            update_chat_read_cursor(self.pool(), caller, chat_id, up_to_message_id).await?;
+        if !updated {
+            return Err(ValidationError::NotFound.into());
+        }
+        Ok(())
     }
 
     #[instrument(skip(self, password))]
@@ -489,6 +512,62 @@ pub(super) async fn create_message<'a, E: PgExecutor<'a>>(
     .try_get("id")?;
     debug!("created message with id: {}", result);
     Ok(result)
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn update_chat_last_message<'a, E: PgExecutor<'a>>(
+    executor: E,
+    chat_id: ChatId,
+    message_id: MessageId,
+) -> Result<(), SqlxError> {
+    sqlx::query(
+        "
+        UPDATE chats
+        SET
+            last_message_id = message.id,
+            last_message_at = message.created_at
+        FROM messages AS message
+        WHERE
+            chats.id = $1
+            AND message.id = $2
+            AND message.chat_id = chats.id
+            AND (chats.last_message_id IS NULL OR chats.last_message_id < message.id);
+    ",
+    )
+    .bind(chat_id)
+    .bind(message_id)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+#[instrument(skip(executor))]
+pub(super) async fn update_chat_read_cursor<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+    chat_id: ChatId,
+    up_to_message_id: MessageId,
+) -> Result<bool, SqlxError> {
+    let result = sqlx::query(
+        "
+        UPDATE chats_members
+        SET last_read_message_id = GREATEST(COALESCE(last_read_message_id, 0::bigint), $3)
+        WHERE
+            user_id = $1
+            AND chat_id = $2
+            AND EXISTS (
+                SELECT 1
+                FROM messages
+                WHERE messages.id = $3 AND messages.chat_id = $2
+            );
+    ",
+    )
+    .bind(user_id)
+    .bind(chat_id)
+    .bind(up_to_message_id)
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() != 0)
 }
 
 #[instrument(skip(transaction))]

@@ -1,5 +1,7 @@
-use serde::Serialize;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
+use crate::models::message::MessageId;
 use crate::models::user::UserId;
 
 pub type ChatId = i64;
@@ -36,11 +38,20 @@ pub struct ChatResponse {
     pub id: ChatId,
     pub display_name: Option<String>,
     pub kind: ChatKind,
+    pub last_message_id: Option<MessageId>,
+    pub last_message_text: Option<String>,
+    pub last_message_at: Option<DateTime<Utc>>,
+    pub unread_count: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ListChatsResponse {
     pub chats: Vec<ChatResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MarkChatReadRequest {
+    pub up_to_message_id: MessageId,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]

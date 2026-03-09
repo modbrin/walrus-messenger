@@ -12,9 +12,14 @@ use crate::models::message::{ListMessagesResponse, MessageId, MessageResponse};
 use crate::models::session::{RefreshTokenResponse, ResolveSessionResponse, SessionId};
 use crate::models::user::{
     GetUserCredentialsByAliasResponse, GetUserIdByAliasResponse, GetUserRoleResponse, UserId,
+    WhoAmIResponse,
 };
 
 impl DbConnection {
+    pub async fn whoami(&self, user_id: UserId) -> Result<WhoAmIResponse, SqlxError> {
+        get_whoami_by_user_id(self.pool(), user_id).await
+    }
+
     pub async fn list_chats(
         &self,
         user_id: UserId,
@@ -91,6 +96,23 @@ pub(super) async fn get_user_role<'a, E: PgExecutor<'a>>(
 }
 
 #[instrument(skip(executor))]
+pub(super) async fn get_whoami_by_user_id<'a, E: PgExecutor<'a>>(
+    executor: E,
+    user_id: UserId,
+) -> Result<WhoAmIResponse, SqlxError> {
+    sqlx::query_as(
+        "
+    SELECT id AS user_id, alias, display_name, role
+    FROM users
+    WHERE id = $1;
+    ",
+    )
+    .bind(user_id)
+    .fetch_one(executor)
+    .await
+}
+
+#[instrument(skip(executor))]
 pub(super) async fn get_user_id_by_alias<'a, E: PgExecutor<'a>>(
     executor: E,
     alias: &str,
@@ -163,7 +185,11 @@ pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
     SELECT
         chats.id AS id,
         COALESCE(chats.display_name, peer.display_name) AS display_name,
-        chats.kind AS kind
+        chats.kind AS kind,
+        chats.last_message_id AS last_message_id,
+        last_message.text AS last_message_text,
+        chats.last_message_at AS last_message_at,
+        COALESCE(unread.unread_count, 0) AS unread_count
     FROM
         chats_members self_member
         JOIN chats ON self_member.chat_id = chats.id
@@ -172,10 +198,20 @@ pub(super) async fn list_chats_for_user<'a, E: PgExecutor<'a>>(
             AND peer_member.chat_id = chats.id
             AND peer_member.user_id != self_member.user_id
         LEFT JOIN users peer ON peer.id = peer_member.user_id
+        LEFT JOIN messages last_message ON last_message.id = chats.last_message_id
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS unread_count
+            FROM messages
+            WHERE
+                messages.chat_id = chats.id
+                AND messages.id > COALESCE(self_member.last_read_message_id, 0)
+                AND (messages.user_id IS NULL OR messages.user_id <> self_member.user_id)
+        ) unread ON TRUE
     WHERE
         self_member.user_id = $1
     ORDER BY
-        chats.id
+        chats.last_message_at DESC NULLS LAST,
+        chats.id DESC
     LIMIT $2 OFFSET ($3 - 1) * $2;
     ",
     )

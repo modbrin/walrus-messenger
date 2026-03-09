@@ -60,7 +60,10 @@ impl IntoResponse for RequestError {
                     )
                 }
             },
-            Self::Validation(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+            Self::Validation(e) => match e {
+                ValidationError::NotFound => (StatusCode::NOT_FOUND, e.to_string()),
+                _ => (StatusCode::BAD_REQUEST, e.to_string()),
+            },
             e @ Self::BadCredentials => (StatusCode::UNAUTHORIZED, e.to_string()),
             e @ Self::RateLimited(_) => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
             e @ Self::Interrupted => (StatusCode::CONFLICT, e.to_string()),
@@ -94,5 +97,25 @@ impl IntoResponse for SessionError {
         };
         let error = json!({ "error": error }).to_string();
         (status, error).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    use super::{RequestError, ValidationError};
+
+    #[test]
+    fn validation_not_found_maps_to_404() {
+        let response = RequestError::Validation(ValidationError::NotFound).into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn other_validation_errors_stay_400() {
+        let response = RequestError::Validation(ValidationError::AlreadyExists).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

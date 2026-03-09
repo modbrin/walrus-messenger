@@ -11,7 +11,7 @@ use crate::database::connection::{DbConfig, DbConnection};
 use crate::error::{RequestError, SessionError, ValidationError};
 use crate::models::chat::{ChatId, ChatKind, ChatResponse};
 use crate::models::session::SessionId;
-use crate::models::user::UserId;
+use crate::models::user::{UserId, UserRole};
 
 /// Some tests can't run in parallel, prevent them from breaking each other's state
 static SERIAL_LOCK: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
@@ -81,6 +81,16 @@ async fn find_chat_id(
             )
         })
         .id
+}
+
+async fn find_chat_by_id(db: &DbConnection, user_id: UserId, chat_id: ChatId) -> ChatResponse {
+    list_user_chats(db, user_id)
+        .await
+        .into_iter()
+        .find(|chat| chat.id == chat_id)
+        .unwrap_or_else(|| {
+            panic!("expected chat not found for user_id={user_id}, chat_id={chat_id}")
+        })
 }
 
 async fn count_chats_by_kind(db: &DbConnection, user_id: UserId, kind: ChatKind) -> usize {
@@ -310,6 +320,113 @@ async fn list_messages_pagination() {
 }
 
 #[tokio::test]
+async fn list_chats_exposes_last_message_preview_and_unread_count() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let user_a = invite_regular(&db, "preview_a", "passforpreviewa").await;
+    let user_b = invite_regular(&db, "preview_b", "passforpreviewb").await;
+    let chat_id = find_chat_id(&db, user_a, ChatKind::Private, Some("preview_b")).await;
+
+    let _msg_1 = db
+        .send_message(user_a, chat_id, "message_from_a")
+        .await
+        .unwrap();
+    let msg_2 = db
+        .send_message(user_b, chat_id, "message_from_b")
+        .await
+        .unwrap();
+
+    let chats_for_a = list_user_chats(&db, user_a).await;
+    assert_eq!(chats_for_a.first().map(|chat| chat.id), Some(chat_id));
+
+    let chat_for_a = find_chat_by_id(&db, user_a, chat_id).await;
+    assert_eq!(chat_for_a.last_message_id, Some(msg_2));
+    assert_eq!(
+        chat_for_a.last_message_text.as_deref(),
+        Some("message_from_b")
+    );
+    assert!(chat_for_a.last_message_at.is_some());
+    assert_eq!(chat_for_a.unread_count, 1);
+
+    let chat_for_b = find_chat_by_id(&db, user_b, chat_id).await;
+    assert_eq!(chat_for_b.last_message_id, Some(msg_2));
+    assert_eq!(
+        chat_for_b.last_message_text.as_deref(),
+        Some("message_from_b")
+    );
+    assert_eq!(chat_for_b.unread_count, 1);
+
+    db.mark_chat_read(user_b, chat_id, msg_2).await.unwrap();
+
+    let chat_for_b_after_read = find_chat_by_id(&db, user_b, chat_id).await;
+    assert_eq!(chat_for_b_after_read.unread_count, 0);
+
+    db.send_message(user_b, chat_id, "message_from_b_2")
+        .await
+        .unwrap();
+
+    let chat_for_a_after_new = find_chat_by_id(&db, user_a, chat_id).await;
+    assert_eq!(chat_for_a_after_new.unread_count, 2);
+    let chat_for_b_after_new = find_chat_by_id(&db, user_b, chat_id).await;
+    assert_eq!(chat_for_b_after_new.unread_count, 0);
+}
+
+#[tokio::test]
+async fn mark_chat_read_is_monotonic_and_validates_target_message_scope() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let user_a = invite_regular(&db, "reader_a", "passforreadera").await;
+    let user_b = invite_regular(&db, "reader_b", "passforreaderb").await;
+    let user_c = invite_regular(&db, "reader_c", "passforreaderc").await;
+    let chat_ab_id = find_chat_id(&db, user_a, ChatKind::Private, Some("reader_b")).await;
+    let self_chat_b_id = find_chat_id(&db, user_b, ChatKind::WithSelf, None).await;
+
+    let msg_1 = db
+        .send_message(user_a, chat_ab_id, "a_msg_1")
+        .await
+        .unwrap();
+    let msg_2 = db
+        .send_message(user_a, chat_ab_id, "a_msg_2")
+        .await
+        .unwrap();
+    db.mark_chat_read(user_b, chat_ab_id, msg_2).await.unwrap();
+
+    // Older cursor update should not move read position backwards.
+    db.mark_chat_read(user_b, chat_ab_id, msg_1).await.unwrap();
+
+    db.send_message(user_a, chat_ab_id, "a_msg_3")
+        .await
+        .unwrap();
+    let chat_for_b = find_chat_by_id(&db, user_b, chat_ab_id).await;
+    assert_eq!(chat_for_b.unread_count, 1);
+
+    let wrong_chat_message_id = db
+        .send_message(user_b, self_chat_b_id, "self_only")
+        .await
+        .unwrap();
+
+    let non_member_err = db
+        .mark_chat_read(user_c, chat_ab_id, msg_2)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        non_member_err,
+        RequestError::Validation(ValidationError::NotFound)
+    ));
+
+    let wrong_chat_err = db
+        .mark_chat_read(user_b, chat_ab_id, wrong_chat_message_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        wrong_chat_err,
+        RequestError::Validation(ValidationError::NotFound)
+    ));
+}
+
+#[tokio::test]
 async fn login_and_resolve_session() {
     let _lock = SERIAL_LOCK.lock().await;
     let db = init_and_get_db().await;
@@ -383,6 +500,33 @@ async fn change_password() {
     let new_login_result = db.login(alias, new_password).await.unwrap();
     let resolved_user = resolve_session(&db, &new_login_result).await.unwrap();
     assert_eq!(resolved_user, user_id);
+}
+
+#[tokio::test]
+async fn whoami_returns_alias_and_display_name() {
+    let _lock = SERIAL_LOCK.lock().await;
+    let db = init_and_get_db().await;
+
+    let initial_alias = "existing_user_a";
+    let pass = "existing_password_a";
+    let user_id = invite_regular(&db, initial_alias, pass).await;
+
+    let initial_whoami = db.whoami(user_id).await.unwrap();
+    assert_eq!(initial_whoami.user_id, user_id);
+    assert_eq!(initial_whoami.alias, initial_alias);
+    assert_eq!(initial_whoami.display_name, initial_alias);
+    assert_eq!(initial_whoami.role, UserRole::Regular);
+
+    db.change_alias(user_id, "renamed_user_a").await.unwrap();
+    db.change_display_name(user_id, "Renamed Display")
+        .await
+        .unwrap();
+
+    let updated_whoami = db.whoami(user_id).await.unwrap();
+    assert_eq!(updated_whoami.user_id, user_id);
+    assert_eq!(updated_whoami.alias, "renamed_user_a");
+    assert_eq!(updated_whoami.display_name, "Renamed Display");
+    assert_eq!(updated_whoami.role, UserRole::Regular);
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@ use tracing::info;
 use crate::auth::token::{AuthPayload, Claims, RefreshPayload, TokenExchangePayload};
 use crate::auth::utils::unpack_session_id_and_token;
 use crate::error::{RequestError, ValidationError};
-use crate::models::chat::{ChatId, ListChatsResponse};
+use crate::models::chat::{ChatId, ListChatsResponse, MarkChatReadRequest};
 use crate::models::listing::{ListingMode, ListingQuery};
 use crate::models::message::{
     validate_message_text, ListMessagesResponse, SendMessageRequest, SendMessageResponse,
@@ -36,6 +36,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/auth/logout", post(logout))
         .route("/users/invite", post(invite_user))
         .route("/chats", get(list_chats))
+        .route("/chats/:chat_id/read", post(mark_chat_read))
         .route(
             "/chats/:chat_id/messages",
             get(list_messages).post(send_message),
@@ -134,10 +135,12 @@ pub async fn change_display_name(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn whoami(claims: Claims) -> Json<WhoAmIResponse> {
-    Json(WhoAmIResponse {
-        user_id: claims.user_id,
-    })
+pub async fn whoami(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+) -> Result<Json<WhoAmIResponse>, RequestError> {
+    let response = state.db_connection.whoami(claims.user_id).await?;
+    Ok(Json(response))
 }
 
 pub async fn invite_user(
@@ -212,4 +215,17 @@ pub async fn send_message(
         StatusCode::CREATED,
         Json(SendMessageResponse { message_id }),
     ))
+}
+
+pub async fn mark_chat_read(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(chat_id): Path<ChatId>,
+    Json(payload): Json<MarkChatReadRequest>,
+) -> Result<StatusCode, RequestError> {
+    state
+        .db_connection
+        .mark_chat_read(claims.user_id, chat_id, payload.up_to_message_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

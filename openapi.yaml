@@ -69,9 +69,9 @@ paths:
   /auth/whoami:
     get:
       tags: [auth]
-      summary: Resolve current user by access token
+      summary: Resolve current user profile by access token
       operationId: whoAmI
-      description: Validates bearer access token and returns authenticated user id.
+      description: Validates bearer access token and returns authenticated user profile.
       security:
         - bearerAuth: []
       responses:
@@ -360,6 +360,7 @@ paths:
       description: >
         Returns paginated chats visible to current user.
         `display_name` is normalized for UI list usage; for private chats it resolves to peer display name.
+        Includes latest message preview fields and per-chat unread counter.
         Uses page mode parameters: `limit` and `page`.
       security:
         - bearerAuth: []
@@ -396,6 +397,63 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /chats/{chat_id}/read:
+    post:
+      tags: [messaging]
+      summary: Mark chat messages as read
+      operationId: markChatRead
+      description: >
+        Advances current user's read cursor in a chat up to a specific message id.
+        Cursor updates are monotonic and never move backwards.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: chat_id
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkChatReadRequest'
+      responses:
+        '204':
+          description: Read cursor updated
+        '400':
+          description: Invalid payload or malformed token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Chat/message not found or user has no access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
           content:
             application/json:
               schema:
@@ -636,11 +694,17 @@ components:
     WhoAmIResponse:
       type: object
       additionalProperties: false
-      required: [user_id]
+      required: [user_id, alias, display_name, role]
       properties:
         user_id:
           type: integer
           format: int32
+        alias:
+          type: string
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
 
     TokenExchangePayload:
       type: object
@@ -668,10 +732,15 @@ components:
       type: string
       enum: [with_self, private, group, channel]
 
+    UserRole:
+      type: string
+      enum: [admin, regular]
+
     ChatResponse:
       type: object
       additionalProperties: false
-      required: [id, display_name, kind]
+      required:
+        [id, display_name, kind, last_message_id, last_message_text, last_message_at, unread_count]
       properties:
         id:
           type: integer
@@ -681,6 +750,20 @@ components:
           nullable: true
         kind:
           $ref: '#/components/schemas/ChatKind'
+        last_message_id:
+          type: integer
+          format: int64
+          nullable: true
+        last_message_text:
+          type: string
+          nullable: true
+        last_message_at:
+          type: string
+          format: date-time
+          nullable: true
+        unread_count:
+          type: integer
+          format: int64
 
     ListChatsResponse:
       type: object
@@ -737,6 +820,16 @@ components:
           type: string
           minLength: 1
           maxLength: 4096
+
+    MarkChatReadRequest:
+      type: object
+      additionalProperties: false
+      required: [up_to_message_id]
+      properties:
+        up_to_message_id:
+          type: integer
+          format: int64
+          minimum: 1
 
     SendMessageResponse:
       type: object

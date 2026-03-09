@@ -9,9 +9,12 @@ const USER_ALIAS_LENGTH_LIMIT: usize = 30;
 const USER_PASSWORD_MIN_LENGTH: usize = 8;
 const USER_PASSWORD_MAX_LENGTH: usize = 80;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
 pub struct WhoAmIResponse {
     pub user_id: UserId,
+    pub alias: String,
+    pub display_name: String,
+    pub role: UserRole,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -41,9 +44,10 @@ pub struct InviteUserResponse {
     pub user_id: UserId,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Display, sqlx::Type)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Display, Serialize, sqlx::Type)]
 #[sqlx(type_name = "user_role")]
 #[sqlx(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum UserRole {
     Admin,
     Regular,
